@@ -93,6 +93,10 @@ class FluidSimulator:
         self._stuck_count = ti.field(dtype=int, shape=(1,))
         self._prev_pos = ti.Vector.field(3, dtype=float, shape=num_particles)
 
+        # Volume tracking
+        self._fluid_cell_count = ti.field(dtype=int, shape=(1,))
+        self._init_fluid_cells = ti.field(dtype=int, shape=(1,))
+
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
         self.obstacle_count = ti.field(dtype=int, shape=())
@@ -713,3 +717,21 @@ class FluidSimulator:
                     self.pos[i][d] = eps
                 elif self.pos[i][d] > 1.0 - eps:
                     self.pos[i][d] = 1.0 - eps
+
+    @ti.kernel
+    def compute_fluid_volume(self) -> float:
+        """Count fluid cells as a proxy for volume. Returns ratio to initial."""
+        count = 0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            if self.cell_type[i, j, k] == 0:
+                count += 1
+        self._fluid_cell_count[0] = count
+        init = self._init_fluid_cells[0]
+        if init > 0:
+            return float(count) / float(init)
+        return 1.0
+
+    def save_init_volume(self):
+        """Call once after initialization to save initial fluid cell count."""
+        self.compute_fluid_volume()
+        self._init_fluid_cells[0] = self._fluid_cell_count[0]

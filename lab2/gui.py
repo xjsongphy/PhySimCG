@@ -27,6 +27,7 @@ OBSTACLES = {
     "3 Spheres":     [(0.045, (0.3, 0.65, 0.3)), (0.045, (0.7, 0.45, 0.7)),
                       (0.045, (0.5, 0.55, 0.5))],
     "1 Big + 1 Small":[(0.09, (0.5, 0.55, 0.5)), (0.04, (0.7, 0.5, 0.3))],
+    "Stirrer":       [(0.08, (0.5, 0.5, 0.5))],
 }
 class _Profiler:
     """Lightweight frame profiler. Only active when debug_mode is True."""
@@ -112,6 +113,9 @@ def run_gui(
     scene = window.get_scene()
     camera = ti.ui.Camera()
 
+    # Save initial volume for V-t tracking
+    sim.save_init_volume()
+
     # Camera state (OrbitCamera-style)
     cam_target = np.array([0.5, 0.4, 0.5], dtype=np.float32)
     cam_yaw = -1.57     # radians, horizontal orbit angle
@@ -136,6 +140,8 @@ def run_gui(
     obstacle_name = "None"
     use_cg = False
     sim_method = "FLIP"  # "FLIP" or "APIC"
+    animate_obstacle = False
+    sim_time = 0.0
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -146,6 +152,7 @@ def run_gui(
     debug_mode = debug
     _prof_frame = 0
     _ms_frame = 0.0
+    _vol_history = []
 
     while window.running:
         if debug_mode:
@@ -217,6 +224,8 @@ def run_gui(
                         sim.obstacle_pos[o] = pos_i
             if sim.obstacle_count[None] > 0:
                 g.text("  MMB: drag 1st obs")
+            if g.button("Animate ON" if not animate_obstacle else "Animate OFF"):
+                animate_obstacle = not animate_obstacle
 
         # --- GUI: Color ---
         with gui.sub_window("Color", 0.40, 0.02, 0.12, 0.22) as g:
@@ -237,15 +246,31 @@ def run_gui(
             stuck = sim.debug_count_stuck()
             if stuck > 0:
                 sim.debug_color_stuck_red()
-            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.32) as g:
+            vol_ratio = sim.compute_fluid_volume()
+            _vol_history.append(vol_ratio)
+            if len(_vol_history) > 200:
+                _vol_history.pop(0)
+            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.38) as g:
                 g.text(f"Frame:    {_ms_frame:>6.1f} ms")
                 g.text(f"FPS:      {1000.0 / max(_ms_frame, 0.01):.0f}")
                 g.text(f"Grid:     {sim.nx}x{sim.ny}x{sim.nz}")
                 g.text(f"Particles:{sim.num_particles}")
                 g.text(f"STUCK:    {stuck}  {'!!' if stuck else ''}")
+                g.text(f"Volume:   {vol_ratio:.3f}")
+                g.text(f"Time:     {sim_time:.2f} s")
+                # Mini V-t graph (text-based)
+                g.text("--- V-t (volume ratio) ---")
+                n_pts = len(_vol_history)
+                if n_pts > 1:
+                    step = max(1, n_pts // 20)
+                    for idx in range(0, n_pts, step):
+                        v = _vol_history[idx]
+                        bar_len = int(v * 15)
+                        bar = "#" * bar_len + "." * (15 - bar_len)
+                        g.text(f"  |{bar}|{v:.2f}")
                 g.text("--- avg per call (last ~1s) ---")
                 snap = _profiler.snapshot_and_reset()
-                for name, total, n, avg in snap[:8]:
+                for name, total, n, avg in snap[:6]:
                     g.text(f"  {name:.<12s}{avg:6.1f}ms x{n}")
 
         # ==== Camera & Obstacle Interaction ====
@@ -356,6 +381,18 @@ def run_gui(
         prev_cursor_x, prev_cursor_y = cx, cy
         prev_cursor_valid = True
 
+        # ==== Animate obstacle ====
+        if animate_obstacle and sim.obstacle_count[None] > 0:
+            t = sim_time
+            cx = 0.5 + 0.25 * np.sin(t * 2.0)
+            cz = 0.5 + 0.25 * np.cos(t * 2.0)
+            cy = 0.5 + 0.1 * np.sin(t * 3.0)
+            new_pos = np.array([cx, cy, cz])
+            old_pos = np.array([sim.obstacle_pos[0][0], sim.obstacle_pos[0][1], sim.obstacle_pos[0][2]])
+            vel = (new_pos - old_pos) / max(current_dt, 1e-6)
+            sim.obstacle_pos[0] = new_pos
+            sim.obstacle_vel[0] = vel
+
         # ==== Simulation ====
         if debug_mode:
             t_sim = time.perf_counter()
@@ -369,6 +406,7 @@ def run_gui(
                     gravity=current_gravity,
                     use_cg=use_cg,
                 )
+            sim_time += current_dt * num_substeps
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 
