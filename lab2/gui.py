@@ -447,12 +447,12 @@ def run_gui(
         scene.ambient_light((0.7, 0.7, 0.75))
 
         # Container wireframe
-        scene.particles(box_field, radius=dx * 0.03, color=(0.5, 0.5, 0.5))
+        scene.particles(box_field, radius=dx * 0.05, color=(0.5, 0.5, 0.5))
 
         # Fluid
         scene.particles(
             sim.pos,
-            radius=dx * 0.5,
+            radius=dx * 0.15,
             per_vertex_color=sim.color,
         )
 
