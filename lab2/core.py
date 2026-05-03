@@ -77,16 +77,17 @@ class FluidSimulator:
         self.grid_w_weight = ti.field(dtype=float, shape=(nx, ny, nz + 1))
 
         # Neighbor grid for particle separation
-        self._max_per_cell = 20
+        self._max_per_cell = 8
         self.grid_particle_count = ti.field(dtype=int, shape=(nx, ny, nz))
         self.grid_particle_ids = ti.field(dtype=int, shape=(nx, ny, nz, self._max_per_cell))
 
-        # Obstacle (sphere)
-        self.obstacle_pos = ti.Vector.field(3, dtype=float, shape=(1,))
-        self.obstacle_vel = ti.Vector.field(3, dtype=float, shape=(1,))
-        self.obstacle_radius = ti.field(dtype=float, shape=())
-        self.obstacle_pos[0] = [0.5, 0.5, 0.5]
-        self.obstacle_radius[None] = 0.0
+        # Obstacles (up to 4 spheres)
+        self._max_obstacles = 4
+        self.obstacle_count = ti.field(dtype=int, shape=())
+        self.obstacle_pos = ti.Vector.field(3, dtype=float, shape=(4,))
+        self.obstacle_vel = ti.Vector.field(3, dtype=float, shape=(4,))
+        self.obstacle_radius = ti.field(dtype=float, shape=(4,))
+        self.obstacle_count[None] = 0
 
     # ---- Scene Initialization ----
 
@@ -209,17 +210,18 @@ class FluidSimulator:
 
     @ti.kernel
     def mark_obstacle_cells(self):
-        obs_pos = self.obstacle_pos[0]
-        obs_r = self.obstacle_radius[None]
         dx = self.dx
-        if obs_r > 0:
-            for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-                cx = (i + 0.5) * dx
-                cy = (j + 0.5) * dx
-                cz = (k + 0.5) * dx
-                dist2 = (cx - obs_pos[0]) ** 2 + (cy - obs_pos[1]) ** 2 + (cz - obs_pos[2]) ** 2
-                if dist2 < (obs_r + dx) ** 2:
-                    self.cell_type[i, j, k] = 2
+        for o in ti.static(range(self._max_obstacles)):
+            if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
+                obs_pos = self.obstacle_pos[o]
+                obs_r = self.obstacle_radius[o]
+                for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+                    cx = (i + 0.5) * dx
+                    cy = (j + 0.5) * dx
+                    cz = (k + 0.5) * dx
+                    dist2 = (cx - obs_pos[0]) ** 2 + (cy - obs_pos[1]) ** 2 + (cz - obs_pos[2]) ** 2
+                    if dist2 < (obs_r + dx) ** 2:
+                        self.cell_type[i, j, k] = 2
 
     @ti.kernel
     def clear_obstacle_cells(self):
@@ -239,12 +241,12 @@ class FluidSimulator:
                     self.cell_type[ci, cj, ck] = 0
 
     @ti.kernel
-    def relabel_cells(self):
-        """Relabel fluid/air cells based on current particle positions.
-        Solid (obstacle) cells are preserved."""
+    def relabel_and_density(self):
+        """Combined: relabel cells + update particle density in one pass."""
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             if self.cell_type[i, j, k] != 2:
                 self.cell_type[i, j, k] = 1  # air
+            self.particle_density[i, j, k] = 0.0
         for p in range(self.num_particles):
             if self.pos[p][0] < 0:
                 continue
@@ -253,24 +255,21 @@ class FluidSimulator:
             ck = int(self.pos[p][2] / self.dx)
             if 0 <= ci < self.nx and 0 <= cj < self.ny and 0 <= ck < self.nz:
                 self.cell_type[ci, cj, ck] = 0  # fluid
+                self.particle_density[ci, cj, ck] += 1.0
 
     # ---- Simulation Kernels ----
 
     @ti.kernel
-    def integrate_particles(self, dt: float, gravity: float):
-        for i in range(self.num_particles):
-            if self.pos[i][0] < 0:
-                continue
-            self.vel[i][1] += gravity * dt
-            self.pos[i] += self.vel[i] * dt
-
-    @ti.kernel
-    def handle_particle_collisions(self):
-        """Clamp particles to domain [eps, 1-eps], zero out-boundary velocity."""
+    def integrate_and_collide(self, dt: float, gravity: float):
+        """Single kernel: integrate particles, then clamp domain + obstacle collision."""
         eps = 1e-6
         for i in range(self.num_particles):
             if self.pos[i][0] < 0:
                 continue
+            # Integrate
+            self.vel[i][1] += gravity * dt
+            self.pos[i] += self.vel[i] * dt
+            # Domain boundary
             for d in ti.static(range(3)):
                 if self.pos[i][d] < eps:
                     self.pos[i][d] = eps
@@ -280,31 +279,31 @@ class FluidSimulator:
                     self.pos[i][d] = 1.0 - eps
                     if self.vel[i][d] > 0:
                         self.vel[i][d] = 0.0
-            # Sphere obstacle collision
-            obs_pos = self.obstacle_pos[0]
-            obs_r = self.obstacle_radius[None]
-            if obs_r > 0:
-                diff = self.pos[i] - obs_pos
-                dist = diff.norm()
-                if dist < obs_r and dist > 1e-8:
-                    n = diff / dist
-                    self.pos[i] = obs_pos + n * obs_r
-                    obs_vel = self.obstacle_vel[0]
-                    rel_vel = self.vel[i] - obs_vel
-                    vn = rel_vel.dot(n)
-                    if vn < 0:
-                        self.vel[i] = self.vel[i] - n * vn + obs_vel * 0.5
+            # Obstacle collisions
+            for o in ti.static(range(self._max_obstacles)):
+                if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
+                    obs_pos = self.obstacle_pos[o]
+                    obs_r = self.obstacle_radius[o]
+                    diff = self.pos[i] - obs_pos
+                    dist = diff.norm()
+                    if dist < obs_r and dist > 1e-8:
+                        n = diff / dist
+                        self.pos[i] = obs_pos + n * obs_r
+                        obs_vel = self.obstacle_vel[o]
+                        rel_vel = self.vel[i] - obs_vel
+                        vn = rel_vel.dot(n)
+                        if vn < 0:
+                            self.vel[i] = self.vel[i] - n * vn + obs_vel * 0.5
+
+    def handle_particle_collisions(self):
+        """Compatibility: use integrate_and_collide with zero dt."""
+        self.integrate_and_collide(0.0, 0.0)
 
     def push_particles_apart(self, num_iters: int):
         for _ in range(num_iters):
-            self._clear_neighbor_grid()
+            self.grid_particle_count.fill(0)
             self._build_neighbor_grid()
             self._separate_pass()
-
-    @ti.kernel
-    def _clear_neighbor_grid(self):
-        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            self.grid_particle_count[i, j, k] = 0
 
     @ti.kernel
     def _build_neighbor_grid(self):
@@ -339,9 +338,7 @@ class FluidSimulator:
                 nk = ck + dk - 1
                 if 0 <= ni < self.nx and 0 <= nj < self.ny and 0 <= nk < self.nz:
                     cnt = self.grid_particle_count[ni, nj, nk]
-                    for s in range(ti.i32(self._max_per_cell)):
-                        if s >= cnt:
-                            continue
+                    for s in range(cnt):
                         q = self.grid_particle_ids[ni, nj, nk, s]
                         if q != p:
                             diff = self.pos[p] - self.pos[q]
@@ -453,17 +450,13 @@ class FluidSimulator:
 
     # ---- Grid Utilities ----
 
-    @ti.kernel
     def clear_grid(self):
-        for i, j, k in ti.ndrange(self.nx + 1, self.ny, self.nz):
-            self.grid_u[i, j, k] = 0.0
-            self.grid_u_weight[i, j, k] = 0.0
-        for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
-            self.grid_v[i, j, k] = 0.0
-            self.grid_v_weight[i, j, k] = 0.0
-        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz + 1):
-            self.grid_w[i, j, k] = 0.0
-            self.grid_w_weight[i, j, k] = 0.0
+        self.grid_u.fill(0)
+        self.grid_u_weight.fill(0)
+        self.grid_v.fill(0)
+        self.grid_v_weight.fill(0)
+        self.grid_w.fill(0)
+        self.grid_w_weight.fill(0)
 
     @ti.kernel
     def save_grid_vel_old(self):
