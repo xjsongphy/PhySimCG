@@ -18,6 +18,9 @@ class EulerianSimulator(FluidSimulator):
         self.density = ti.field(dtype=float, shape=(nx, ny, nz))
         self.density_new = ti.field(dtype=float, shape=(nx, ny, nz))
 
+        # Render point color cache (for smooth color transitions)
+        self.render_color = ti.Vector.field(3, dtype=float, shape=num_particles)
+
         # Use particle fields as "render proxies" — one per cell center
         self.num_render = nx * ny * nz
 
@@ -181,17 +184,27 @@ class EulerianSimulator(FluidSimulator):
     @ti.kernel
     def _build_render_points(self):
         dx = self.dx
+        color_change_threshold = 0.1  # Only update color if density changes by more than this
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             idx = i + j * self.nx + k * self.nx * self.ny
             d = self.density_new[i, j, k]
             if d > 0.01:
-                self.pos[idx] = [
-                    (i + 0.5) * dx,
-                    (j + 0.5) * dx,
-                    (k + 0.5) * dx,
-                ]
-                self.color[idx] = [0.2 + 0.8 * d, 0.5, 1.0 - d * 0.5]
+                # Smooth color transitions - only update if density changed significantly
+                target_color = [0.2 + 0.8 * d, 0.5, 1.0 - d * 0.5]
+                # Compare with previous color to determine if update is needed
+                diff_sq = 0.0
+                for c in range(3):
+                    diff_sq += (target_color[c] - self.render_color[idx][c]) ** 2
+                if diff_sq > color_change_threshold ** 2:
+                    self.pos[idx] = [
+                        (i + 0.5) * dx,
+                        (j + 0.5) * dx,
+                        (k + 0.5) * dx,
+                    ]
+                    self.color[idx] = target_color
+                    self.render_color[idx] = target_color
             else:
                 # Move far below domain and use background color so invisible
                 self.pos[idx] = [0.5, -10.0, 0.5]
                 self.color[idx] = [0.1, 0.1, 0.15]
+                self.render_color[idx] = [0.1, 0.1, 0.15]
