@@ -23,12 +23,17 @@ class FLIPSimulator(FluidSimulator):
         over_relaxation: float = 1.9,
         compensate_drift: bool = True,
         separate_particles: bool = True,
+        reflection: bool = False,
     ):
-        self.integrate_particles(dt, gravity)
-        self.handle_particle_collisions()
+        if reflection:
+            self._substep_reflection(dt, flip_ratio, gravity,
+                                     num_pressure_iters, num_particle_iters,
+                                     over_relaxation, compensate_drift, separate_particles)
+            return
+        self.integrate_and_collide(dt, gravity)
         if separate_particles:
             self.push_particles_apart(num_particle_iters)
-        self.handle_particle_collisions()
+            self.integrate_and_collide(0.0, 0.0)  # collide only (dt=0)
 
         self.clear_grid()
         self.transfer_p2g()
@@ -36,14 +41,66 @@ class FLIPSimulator(FluidSimulator):
 
         self.save_grid_vel_old()
 
-        self.relabel_cells()
-        self.update_particle_density()
+        self.relabel_and_density()
         self.solve_incompressibility(
             num_pressure_iters, dt, over_relaxation, compensate_drift
         )
         self.set_boundary_velocity()
 
         self.transfer_g2p(flip_ratio)
+
+    def _substep_reflection(self, dt, flip_ratio, gravity, np_iter, npart_iter,
+                            over_rel, comp_drift, sep_parts):
+        half_dt = dt * 0.5
+
+        # --- First half: standard FLIP to mid-step ---
+        self.integrate_and_collide(half_dt, gravity)
+        if sep_parts:
+            self.push_particles_apart(npart_iter)
+            self.integrate_and_collide(0.0, 0.0)
+
+        self.clear_grid()
+        self.transfer_p2g()
+        self.normalize_grid_vel()
+
+        # Save advected grid velocity before projection
+        self.save_grid_vel_old()
+
+        self.relabel_and_density()
+        self.solve_incompressibility(np_iter, half_dt, over_rel, comp_drift)
+        self.set_boundary_velocity()
+
+        # Reflect: u_reflected = 2*u_projected - u_advected
+        self._reflect_grid_vel()
+
+        # G2P: transfer reflected velocity to particles
+        self.transfer_g2p(flip_ratio)
+
+        # --- Second half: advect with reflected velocity ---
+        self.integrate_and_collide(half_dt, 0.0)
+        if sep_parts:
+            self.push_particles_apart(npart_iter)
+            self.integrate_and_collide(0.0, 0.0)
+
+        self.clear_grid()
+        self.transfer_p2g()
+        self.normalize_grid_vel()
+
+        self.relabel_and_density()
+        self.solve_incompressibility(np_iter, half_dt, over_rel, comp_drift)
+        self.set_boundary_velocity()
+
+        self.transfer_g2p(flip_ratio)
+
+    @ti.kernel
+    def _reflect_grid_vel(self):
+        """R = 2*P - I: reflect grid velocity across projection manifold."""
+        for i, j, k in ti.ndrange(self.nx + 1, self.ny, self.nz):
+            self.grid_u[i, j, k] = 2.0 * self.grid_u[i, j, k] - self.grid_u_old[i, j, k]
+        for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
+            self.grid_v[i, j, k] = 2.0 * self.grid_v[i, j, k] - self.grid_v_old[i, j, k]
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz + 1):
+            self.grid_w[i, j, k] = 2.0 * self.grid_w[i, j, k] - self.grid_w_old[i, j, k]
 
     @ti.kernel
     def transfer_p2g(self):
