@@ -20,12 +20,15 @@ def run(debug=False):
     run_gui(
         sim,
         substep_fn=sim.substep,
-        dt=0.02,
+        dt=0.01,
         num_substeps=2,
         flip_ratio=0.95,
         gravity=-9.8,
         window_title="Lab2 - FLIP Fluid",
         debug=debug,
+        show_color=True,
+        show_flip=True,
+        show_solver=True,
     )
 
 

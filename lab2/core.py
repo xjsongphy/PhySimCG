@@ -351,12 +351,20 @@ class FluidSimulator:
             if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
                 obs_pos = self.obstacle_pos[o]
                 obs_r = self.obstacle_radius[o]
-                for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+                r2 = (obs_r + dx) ** 2
+                # Only iterate over bounding box around obstacle
+                i0 = ti.max(0, int((obs_pos[0] - obs_r - dx) / dx))
+                i1 = ti.min(self.nx - 1, int((obs_pos[0] + obs_r + dx) / dx) + 1)
+                j0 = ti.max(0, int((obs_pos[1] - obs_r - dx) / dx))
+                j1 = ti.min(self.ny - 1, int((obs_pos[1] + obs_r + dx) / dx) + 1)
+                k0 = ti.max(0, int((obs_pos[2] - obs_r - dx) / dx))
+                k1 = ti.min(self.nz - 1, int((obs_pos[2] + obs_r + dx) / dx) + 1)
+                for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
                     cx = (i + 0.5) * dx
                     cy = (j + 0.5) * dx
                     cz = (k + 0.5) * dx
                     dist2 = (cx - obs_pos[0]) ** 2 + (cy - obs_pos[1]) ** 2 + (cz - obs_pos[2]) ** 2
-                    if dist2 < (obs_r + dx) ** 2:
+                    if dist2 < r2:
                         self.cell_type[i, j, k] = 2
 
     @ti.kernel

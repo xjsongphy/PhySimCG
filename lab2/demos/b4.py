@@ -26,6 +26,11 @@ def run(debug=False):
         gravity=-9.8,
         window_title="Lab2 - B4 APIC Fluid",
         debug=debug,
+        show_obstacle=True,
+        show_resolution=True,
+        show_color=True,
+        show_flip=True,
+        show_solver=True,
     )
 
 

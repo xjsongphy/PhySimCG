@@ -23,6 +23,9 @@ def run(debug=False):
         gravity=-9.8,
         window_title="Lab2 - B3 Eulerian Fluid",
         debug=debug,
+        show_color=False,
+        show_flip=False,
+        show_solver=False,
     )
 
 

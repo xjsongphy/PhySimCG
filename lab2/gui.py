@@ -22,12 +22,12 @@ def _get_screen_resolution() -> tuple:
 SCENES = ["Dam Break", "Drop", "Double Dam"]
 OBSTACLES = {
     "None":          [],
-    "1 Sphere":      [(0.06, (0.5, 0.5, 0.5))],
-    "2 Spheres":     [(0.05, (0.35, 0.6, 0.35)), (0.05, (0.65, 0.4, 0.65))],
-    "3 Spheres":     [(0.045, (0.3, 0.65, 0.3)), (0.045, (0.7, 0.45, 0.7)),
-                      (0.045, (0.5, 0.55, 0.5))],
-    "1 Big + 1 Small":[(0.09, (0.5, 0.55, 0.5)), (0.04, (0.7, 0.5, 0.3))],
-    "Stirrer":       [(0.08, (0.5, 0.5, 0.5))],
+    "1 Sphere":      [(0.06, (0.5, 0.35, 0.5))],
+    "2 Spheres":     [(0.05, (0.35, 0.4, 0.35)), (0.05, (0.65, 0.3, 0.65))],
+    "3 Spheres":     [(0.045, (0.3, 0.45, 0.3)), (0.045, (0.7, 0.35, 0.7)),
+                      (0.045, (0.5, 0.38, 0.5))],
+    "1 Big + 1 Small":[(0.09, (0.5, 0.38, 0.5)), (0.04, (0.7, 0.35, 0.3))],
+    "Stirrer":       [(0.08, (0.5, 0.35, 0.5))],
 }
 class _Profiler:
     """Lightweight frame profiler. Only active when debug_mode is True."""
@@ -103,6 +103,12 @@ def run_gui(
     window_title: str = "FLIP Fluid Simulation",
     window_size: tuple = None,
     debug: bool = False,
+    # Panel visibility flags
+    show_obstacle: bool = False,
+    show_resolution: bool = False,
+    show_color: bool = True,
+    show_flip: bool = True,
+    show_solver: bool = True,
 ):
     if window_size is None:
         screen_w, screen_h = _get_screen_resolution()
@@ -185,61 +191,68 @@ def run_gui(
                 sim.apply_perturbation(0.5, 0.4, 0.5, 6.0)
 
         # --- GUI: Resolution ---
-        with gui.sub_window("Resolution", 0.26, 0.22, 0.14, 0.22) as g:
-            g.text("=== Resolution ===")
-            g.text(f"  Grid: {sim.nx}x{sim.ny}x{sim.nz}")
-            for name, (nx, ny, nz) in RESOLUTIONS.items():
-                if g.button(name):
-                    current_res_name = name
-                    _recreate = (current_scene, nx, ny, nz)
+        if show_resolution:
+            with gui.sub_window("Resolution", 0.26, 0.22, 0.14, 0.22) as g:
+                g.text("=== Resolution ===")
+                g.text(f"  Grid: {sim.nx}x{sim.ny}x{sim.nz}")
+                for name, (nx, ny, nz) in RESOLUTIONS.items():
+                    if g.button(name):
+                        current_res_name = name
+                        _recreate = (current_scene, nx, ny, nz)
 
         # --- GUI: Controls ---
-        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.38) as g:
+        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.36) as g:
             g.text("=== Simulation ===")
-            current_dt = g.slider_float("dt", current_dt, 0.0005, 0.015)
-            current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
+            current_dt = g.slider_float("dt", current_dt, 0.002, 0.02)
+            if show_flip:
+                current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
             current_gravity = g.slider_float("gravity", current_gravity, -20.0, 0.0)
             if g.button("Pause / Resume"):
                 paused = not paused
-            g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
-            if g.button("Toggle CG/GS"):
-                use_cg = not use_cg
-            g.text(f"  Method: {sim_method}")
-            if g.button("Toggle FLIP/APIC"):
-                new_method = "APIC" if sim_method == "FLIP" else "FLIP"
-                sim_method = new_method
-                _recreate = (current_scene, sim.nx, sim.ny, sim.nz)
+            if show_solver:
+                g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
+                if g.button("Toggle CG/GS"):
+                    use_cg = not use_cg
+            if show_flip:
+                g.text(f"  Method: {sim_method}")
+                if g.button("Toggle FLIP/APIC"):
+                    new_method = "APIC" if sim_method == "FLIP" else "FLIP"
+                    sim_method = new_method
+                    _recreate = (current_scene, sim.nx, sim.ny, sim.nz)
 
         # --- GUI: Obstacle ---
-        with gui.sub_window("Obstacle", 0.02, 0.62, 0.22, 0.25) as g:
-            g.text("=== Obstacle ===")
-            g.text(f"  Current: {obstacle_name}")
-            for name in OBSTACLES:
-                if g.button(name):
-                    obstacle_name = name
-                    obs_list = OBSTACLES[name]
-                    sim.obstacle_count[None] = len(obs_list)
-                    for o, (r_i, pos_i) in enumerate(obs_list):
-                        sim.obstacle_radius[o] = r_i
-                        sim.obstacle_pos[o] = pos_i
-            if sim.obstacle_count[None] > 0:
-                g.text("  MMB: drag 1st obs")
-            if g.button("Animate ON" if not animate_obstacle else "Animate OFF"):
-                animate_obstacle = not animate_obstacle
+        if show_obstacle:
+            with gui.sub_window("Obstacle", 0.02, 0.70, 0.22, 0.20) as g:
+                g.text("=== Obstacle ===")
+                g.text(f"  Current: {obstacle_name}")
+                for name in OBSTACLES:
+                    if g.button(name):
+                        obstacle_name = name
+                        obs_list = OBSTACLES[name]
+                        sim.obstacle_count[None] = len(obs_list)
+                        for o, (r_i, pos_i) in enumerate(obs_list):
+                            sim.obstacle_radius[o] = r_i
+                            sim.obstacle_pos[o] = pos_i
+                if sim.obstacle_count[None] > 0:
+                    g.text("  LMB: drag in camera plane")
+                    g.text("  RMB: move up/down")
+                if g.button("Animate ON" if not animate_obstacle else "Animate OFF"):
+                    animate_obstacle = not animate_obstacle
 
         # --- GUI: Color ---
-        with gui.sub_window("Color", 0.40, 0.02, 0.12, 0.22) as g:
-            g.text("=== Color ===")
-            g.text(f"  Mode: {current_color_mode}")
-            for mode in ["Speed", "Density", "Uniform"]:
-                if g.button(mode):
-                    current_color_mode = mode
+        if show_color:
+            with gui.sub_window("Color", 0.40, 0.02, 0.12, 0.22) as g:
+                g.text("=== Color ===")
+                g.text(f"  Mode: {current_color_mode}")
+                for mode in ["Speed", "Density", "Uniform"]:
+                    if g.button(mode):
+                        current_color_mode = mode
 
         # --- GUI: Debug toggle ---
         with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.08) as g:
-            g.text("=== Debug ===")
-            if g.button("Debug ON" if not debug_mode else "Debug OFF"):
-                debug_mode = not debug_mode
+                g.text("=== Debug ===")
+                if g.button("Debug ON" if not debug_mode else "Debug OFF"):
+                    debug_mode = not debug_mode
 
         # --- GUI: Debug timing ---
         if debug_mode:
@@ -277,8 +290,8 @@ def run_gui(
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
 
-        # Skip camera controls when cursor is over GUI panels
-        over_gui = (cx < 0.54 and cy < 0.88)
+        # All GUI panels are on the left side — block world interaction there
+        over_gui = (cx < 0.55)
 
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
@@ -319,49 +332,53 @@ def run_gui(
                         best_t = t
                         picked_obs = o
 
-        # LMB: drag obstacle (if picked) or pan camera
+        # Obstacle dragging (camera-relative, like vcx-sim)
         dragging_obs = False
-        if lmb and not over_gui and picked_obs >= 0:
-            dragging_obs = True
-            # Drag obstacle along the plane perpendicular to ray at hit point
-            plane_y = sim.obstacle_pos[picked_obs][1]
-            if abs(ray_dir[1]) > 1e-8:
-                t_hit = (plane_y - cam_pos[1]) / ray_dir[1]
-                if t_hit > 0:
-                    hit = cam_pos + t_hit * ray_dir
-                    hit[0] = np.clip(hit[0], 0.05, 0.95)
-                    hit[2] = np.clip(hit[2], 0.05, 0.95)
-                    hit[1] = plane_y
-                    old_pos = np.array([
-                        sim.obstacle_pos[picked_obs][0],
-                        sim.obstacle_pos[picked_obs][1],
-                        sim.obstacle_pos[picked_obs][2],
-                    ])
-                    vel_est = (hit - old_pos) / max(current_dt, 1e-6)
-                    sim.obstacle_pos[picked_obs] = hit
-                    sim.obstacle_vel[picked_obs] = vel_est
-
-        # Camera controls
+        moving_obs_vert = False
         if prev_cursor_valid:
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
 
-            # RMB: rotate camera direction (orbit)
-            if rmb and not over_gui:
+            # Move speed: full screen drag ≈ 1 world unit
+            move_scale = 1.5
+
+            # LMB: drag obstacle in camera plane
+            if lmb and not over_gui and picked_obs >= 0:
+                dragging_obs = True
+                old = np.array([sim.obstacle_pos[picked_obs][0],
+                               sim.obstacle_pos[picked_obs][1],
+                               sim.obstacle_pos[picked_obs][2]])
+                new = old + right_cam * (dx_mouse * move_scale) + cam_up * (-dy_mouse * move_scale)
+                new[0] = np.clip(new[0], 0.05, 0.95)
+                new[1] = np.clip(new[1], 0.05, 0.95)
+                new[2] = np.clip(new[2], 0.05, 0.95)
+                sim.obstacle_pos[picked_obs] = new
+                sim.obstacle_vel[picked_obs] = (new - old) / (max(current_dt, 1e-6) * 4)
+
+            # RMB: move obstacle up/down (world Y)
+            if rmb and not over_gui and picked_obs >= 0:
+                moving_obs_vert = True
+                old_y = sim.obstacle_pos[picked_obs][1]
+                new_y = np.clip(old_y - dy_mouse * move_scale, 0.05, 0.95)
+                sim.obstacle_pos[picked_obs][1] = new_y
+                sim.obstacle_vel[picked_obs][1] = (new_y - old_y) / (max(current_dt, 1e-6) * 4)
+
+        # Camera controls (only when not interacting with obstacle)
+        if prev_cursor_valid and not dragging_obs and not moving_obs_vert and not over_gui:
+            if rmb:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
                 cam_pitch = np.clip(cam_pitch, 0.05, 1.5)
 
-            # LMB (no obstacle hit): pan camera position
-            if lmb and not over_gui and not dragging_obs:
+            if lmb and not over_gui:
                 pan_speed = cam_dist * 0.8
                 pan_x = dx_mouse * pan_speed
-                pan_y = -dy_mouse * pan_speed
+                pan_y = dy_mouse * pan_speed
                 forward_h = forward.copy()
                 forward_h[1] = 0
                 forward_h = forward_h / (np.linalg.norm(forward_h) + 1e-8)
                 right_pan = np.array([forward_h[2], 0, -forward_h[0]])
-                cam_target += right_pan * pan_x + np.array([0, pan_y, 0])
+                cam_target += right_pan * pan_x - np.array([0, pan_y, 0])
 
         # Zoom keys
         if window.is_pressed('r'):
@@ -430,12 +447,12 @@ def run_gui(
         scene.ambient_light((0.7, 0.7, 0.75))
 
         # Container wireframe
-        scene.particles(box_field, radius=dx * 0.05, color=(0.5, 0.5, 0.5))
+        scene.particles(box_field, radius=dx * 0.03, color=(0.5, 0.5, 0.5))
 
         # Fluid
         scene.particles(
             sim.pos,
-            radius=dx * 0.15,
+            radius=dx * 0.5,
             per_vertex_color=sim.color,
         )
 
