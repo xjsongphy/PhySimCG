@@ -321,7 +321,7 @@ class FluidSimulator:
     @ti.kernel
     def _separate_pass(self):
         dx = self.dx
-        min_dist = dx * 0.6
+        min_dist = dx * 0.5
         min_dist2 = min_dist * min_dist
         for p in range(self.num_particles):
             if self.pos[p][0] < 0:
@@ -343,7 +343,7 @@ class FluidSimulator:
                             if d2 < min_dist2 and d2 > 1e-12:
                                 d = ti.sqrt(d2)
                                 n_dir = diff / d
-                                self.pos[p] += n_dir * (min_dist - d) * 0.7
+                                self.pos[p] += n_dir * (min_dist - d) * 0.3
 
     @ti.kernel
     def update_particle_density(self):
@@ -428,7 +428,7 @@ class FluidSimulator:
                     self.particle_density[i, j, k]
                     - self.particle_density_init[i, j, k]
                 )
-                div -= density_diff * 0.1
+                div -= density_diff * 0.05
 
             correction = over_relaxation * div / s
 
@@ -505,7 +505,7 @@ class FluidSimulator:
                     self.particle_density[i, j, k]
                     - self.particle_density_init[i, j, k]
                 )
-                div -= density_diff * 0.1
+                div -= density_diff * 0.05
             self._cg_r[i, j, k] = div
 
     @ti.kernel
