@@ -3,6 +3,7 @@ import numpy as np
 import taichi as ti
 from lab2.core import FluidSimulator, scene_particle_count
 from lab2.flip import FLIPSimulator
+from lab2.apic import APICSimulator
 from collections import defaultdict
 
 
@@ -54,9 +55,12 @@ RESOLUTIONS = {
 }
 
 
-def _create_sim(scene_name, nx, ny, nz, obstacle_name):
+def _create_sim(scene_name, nx, ny, nz, obstacle_name, method="FLIP"):
     np_ = scene_particle_count(scene_name, nx)
-    sim = FLIPSimulator(nx, ny, nz, np_)
+    if method == "APIC":
+        sim = APICSimulator(nx, ny, nz, np_)
+    else:
+        sim = FLIPSimulator(nx, ny, nz, np_)
     if scene_name == "Dam Break":
         sim.init_dam_break()
     elif scene_name == "Drop":
@@ -131,6 +135,7 @@ def run_gui(
     current_res_name = "Med (24)"
     obstacle_name = "None"
     use_cg = False
+    sim_method = "FLIP"  # "FLIP" or "APIC"
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -153,7 +158,7 @@ def run_gui(
             if nz is None:
                 nz = sim.nz
             current_scene = scene_name
-            sim = _create_sim(scene_name, nx, ny, nz, obstacle_name)
+            sim = _create_sim(scene_name, nx, ny, nz, obstacle_name, sim_method)
             substep_fn = sim.substep
             dx = sim.dx
             _recreate = None

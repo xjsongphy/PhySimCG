@@ -106,23 +106,19 @@ class FluidSimulator:
         lo_x, hi_x = 0.05, 0.45
         lo_y, hi_y = 0.05, 0.85
         lo_z, hi_z = 0.05, 0.45
-        npx = int((hi_x - lo_x) / spacing)
-        npy = int((hi_y - lo_y) / spacing)
-        npz = int((hi_z - lo_z) / spacing)
         for i in range(self.num_particles):
-            if i < npx * npy * npz:
-                ix = i % npx
-                iy = (i // npx) % npy
-                iz = i // (npx * npy)
-                self.pos[i] = [
-                    lo_x + (ix + 0.5) * spacing,
-                    lo_y + (iy + 0.5) * spacing,
-                    lo_z + (iz + 0.5) * spacing,
-                ]
-                self.vel[i] = [0.0, 0.0, 0.0]
-            else:
-                self.pos[i] = [0.5, -10.0, 0.5]
-                self.vel[i] = [0.0, 0.0, 0.0]
+            npx = int((hi_x - lo_x) / spacing)
+            npy = int((hi_y - lo_y) / spacing)
+            npz = int((hi_z - lo_z) / spacing)
+            ix = i % npx
+            iy = (i // npx) % npy
+            iz = i // (npx * npy)
+            self.pos[i] = [
+                lo_x + (ix + 0.5) * spacing,
+                lo_y + (iy + 0.5) * spacing,
+                lo_z + (iz + 0.5) * spacing,
+            ]
+            self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_drop(self):
@@ -177,8 +173,7 @@ class FluidSimulator:
                     lo_y1 + (iy + 0.5) * spacing,
                     lo_z1 + (iz + 0.5) * spacing,
                 ]
-                self.vel[i] = [0.0, 0.0, 0.0]
-            elif i < count1 + npx2 * npy2 * npz2:
+            else:
                 idx = i - count1
                 ix = idx % npx2
                 iy = (idx // npx2) % npy2
@@ -188,18 +183,12 @@ class FluidSimulator:
                     lo_y2 + (iy + 0.5) * spacing,
                     lo_z2 + (iz + 0.5) * spacing,
                 ]
-                self.vel[i] = [0.0, 0.0, 0.0]
-            else:
-                self.pos[i] = [0.5, -10.0, 0.5]
-                self.vel[i] = [0.0, 0.0, 0.0]
+            self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_colors(self):
         for i in range(self.num_particles):
-            if self.pos[i][0] >= 0:
-                self.color[i] = [0.2, 0.5, 1.0]
-            else:
-                self.color[i] = [0.1, 0.1, 0.15]
+            self.color[i] = [0.2, 0.5, 1.0]
 
     # ---- Cell Type Management ----
 
