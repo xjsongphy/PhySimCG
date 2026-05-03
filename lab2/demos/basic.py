@@ -6,29 +6,22 @@ from lab2.gui import run_gui
 def run():
     ti.init(arch=ti.vulkan)
 
-    # Grid resolution
     nx, ny, nz = 24, 48, 24
-
-    # Estimate particle count for dam break
     dx = 1.0 / nx
     spacing = dx * 0.5
-    lo_x, hi_x = 0.05, 0.45
-    lo_y, hi_y = 0.05, 0.85
-    lo_z, hi_z = 0.05, 0.45
-    npx = int((hi_x - lo_x) / spacing)
-    npy = int((hi_y - lo_y) / spacing)
-    npz = int((hi_z - lo_z) / spacing)
-    num_particles = npx * npy * npz
+
+    # Max particles across all scenes (largest scene determines this)
+    # Dam break: ~13000, Drop: ~5000, Double dam: ~13000
+    num_particles = 16000
 
     sim = FLIPSimulator(nx, ny, nz, num_particles)
 
-    # Initialize
+    # Default scene
     sim.init_dam_break()
     sim.init_cell_types()
     sim.update_particle_density()
     sim.store_initial_density()
 
-    # Run with GUI
     run_gui(
         sim,
         substep_fn=sim.substep,
@@ -36,7 +29,7 @@ def run():
         num_substeps=2,
         flip_ratio=0.95,
         gravity=-9.8,
-        window_title="Lab2 - FLIP Fluid (Basic)",
+        window_title="Lab2 - FLIP Fluid",
     )
 
 
