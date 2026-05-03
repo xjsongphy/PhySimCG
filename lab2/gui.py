@@ -187,7 +187,7 @@ def run_gui(
                     _recreate = (current_scene, nx, ny, nz)
 
         # --- GUI: Controls ---
-        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.32) as g:
+        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.38) as g:
             g.text("=== Simulation ===")
             current_dt = g.slider_float("dt", current_dt, 0.001, 0.03)
             current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
@@ -197,6 +197,11 @@ def run_gui(
             g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
             if g.button("Toggle CG/GS"):
                 use_cg = not use_cg
+            g.text(f"  Method: {sim_method}")
+            if g.button("Toggle FLIP/APIC"):
+                new_method = "APIC" if sim_method == "FLIP" else "FLIP"
+                sim_method = new_method
+                _recreate = (current_scene, sim.nx, sim.ny, sim.nz)
 
         # --- GUI: Obstacle ---
         with gui.sub_window("Obstacle", 0.02, 0.62, 0.22, 0.25) as g:
