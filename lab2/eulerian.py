@@ -190,5 +190,6 @@ class EulerianSimulator(FluidSimulator):
                 ]
                 self.color[idx] = [0.2 + 0.8 * d, 0.5, 1.0 - d * 0.5]
             else:
-                self.pos[idx] = [-100.0, -100.0, -100.0]
+                # Move far below domain and use background color so invisible
+                self.pos[idx] = [0.5, -10.0, 0.5]
                 self.color[idx] = [0.1, 0.1, 0.15]

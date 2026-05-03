@@ -86,8 +86,8 @@ class FluidSimulator:
         self._cg_r = ti.field(dtype=float, shape=(nx, ny, nz))
         self._cg_p = ti.field(dtype=float, shape=(nx, ny, nz))
         self._cg_Ap = ti.field(dtype=float, shape=(nx, ny, nz))
-        self._cg_rdotr = ti.field(dtype=float, shape=())
-        self._cg_pAp = ti.field(dtype=float, shape=())
+        self._cg_rdotr = ti.field(dtype=float, shape=(1,))
+        self._cg_pAp = ti.field(dtype=float, shape=(1,))
 
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
@@ -121,7 +121,7 @@ class FluidSimulator:
                 ]
                 self.vel[i] = [0.0, 0.0, 0.0]
             else:
-                self.pos[i] = [-100.0, -100.0, -100.0]
+                self.pos[i] = [0.5, -10.0, 0.5]
                 self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
@@ -190,7 +190,7 @@ class FluidSimulator:
                 ]
                 self.vel[i] = [0.0, 0.0, 0.0]
             else:
-                self.pos[i] = [-100.0, -100.0, -100.0]
+                self.pos[i] = [0.5, -10.0, 0.5]
                 self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
@@ -468,25 +468,25 @@ class FluidSimulator:
         self.pressure.fill(0)
         self._cg_init_residual(compensate_drift)
         self._cg_p.copy_from(self._cg_r)
-        self._cg_rdotr[None] = 0.0
+        self._cg_rdotr[0] = 0.0
         self._cg_compute_rdotr()
-        rr = self._cg_rdotr[None]
+        rr = self._cg_rdotr[0]
         if rr < 1e-14:
             return
         for _ in range(num_iters):
             self._cg_Ap.fill(0)
             self._cg_compute_Ap()
-            self._cg_pAp[None] = 0.0
+            self._cg_pAp[0] = 0.0
             self._cg_compute_pAp()
-            pAp = self._cg_pAp[None]
+            pAp = self._cg_pAp[0]
             if abs(pAp) < 1e-14:
                 break
             alpha = rr / pAp
             self._cg_update(alpha)
             old_rr = rr
-            self._cg_rdotr[None] = 0.0
+            self._cg_rdotr[0] = 0.0
             self._cg_compute_rdotr()
-            rr = self._cg_rdotr[None]
+            rr = self._cg_rdotr[0]
             if rr < 1e-14:
                 break
             beta = rr / old_rr
@@ -498,7 +498,7 @@ class FluidSimulator:
     @ti.kernel
     def _cg_init_residual(self, compensate_drift: bool):
         """Initialize residual r = b - Ax, with x=0 so r = b (divergence)."""
-        self._cg_rdotr[None] = 0.0
+        self._cg_rdotr[0] = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             if self.cell_type[i, j, k] != 0:
                 self._cg_r[i, j, k] = 0.0
@@ -524,7 +524,7 @@ class FluidSimulator:
         s = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             s += self._cg_r[i, j, k] * self._cg_r[i, j, k]
-        self._cg_rdotr[None] = s
+        self._cg_rdotr[0] = s
 
     @ti.kernel
     def _cg_compute_Ap(self):
@@ -567,7 +567,7 @@ class FluidSimulator:
         s = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             s += self._cg_p[i, j, k] * self._cg_Ap[i, j, k]
-        self._cg_pAp[None] = s
+        self._cg_pAp[0] = s
 
     @ti.kernel
     def _cg_update(self, alpha: float):
