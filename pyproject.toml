@@ -1,7 +1,15 @@
 [project]
 name = "physimcg"
 version = "0.1.0"
-description = "Add your description here"
+description = "Physics Simulation for Computer Graphics"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "taichi>=1.7",
+]
+
+[project.scripts]
+lab2 = "lab2.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["lab2*"]
