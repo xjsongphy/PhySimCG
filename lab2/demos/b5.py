@@ -9,7 +9,7 @@ def run(debug=False):
     ti.init(arch=ti.vulkan)
 
     nx, ny, nz = 24, 48, 24
-    scene = "Double Dam"
+    scene = "Dam Break"
     num_particles = scene_particle_count(scene, nx)
 
     sim = FLIPSimulator(nx, ny, nz, num_particles)
@@ -47,12 +47,13 @@ def run(debug=False):
 
         sim.update_default_colors()
 
-        # Rebuild surface mesh every 5 frames
-        if frame_count % 5 == 0 and not paused:
+        # Rebuild surface mesh every 10 frames (reduce frequency to avoid freezing)
+        # Skip first 30 frames to allow particles to settle
+        if frame_count > 30 and frame_count % 10 == 0 and not paused:
             from lab2.surface import build_surface_mesh
             verts, tris = build_surface_mesh(
                 sim.pos, sim.nx, sim.ny, sim.nz, sim.dx,
-                threshold=0.4, mc_res=1,
+                threshold=0.3, mc_res=2,
             )
             if verts is not None and len(verts) > 0:
                 # Resize fields if needed

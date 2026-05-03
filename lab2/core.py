@@ -5,29 +5,37 @@ import taichi.math as tm
 def scene_particle_count(scene_name: str, nx: int) -> int:
     """Compute exact particle count for a scene at given grid resolution."""
     dx = 1.0 / nx
-    spacing = dx * 0.55
 
     if scene_name == "Dam Break":
-        npx = int((0.45 - 0.05) / spacing)
-        npy = int((0.85 - 0.05) / spacing)
-        npz = int((0.45 - 0.05) / spacing)
+        lo_x, hi_x = 0.05, 0.45
+        lo_y, hi_y = 0.05, 0.85
+        lo_z, hi_z = 0.05, 0.45
+        npx = int((hi_x - lo_x) / dx)
+        npy = int((hi_y - lo_y) / dx)
+        npz = int((hi_z - lo_z) / dx)
         return npx * npy * npz
 
     elif scene_name == "Drop":
         cx, cy, cz = 0.5, 0.75, 0.5
         r = 0.15
-        npx = int((2 * r) / spacing)
-        npy = int((2 * r) / spacing)
-        npz = int((2 * r) / spacing)
+        lo_x = cx - r
+        hi_x = cx + r
+        lo_y = cy - r
+        hi_y = cy + r
+        lo_z = cz - r
+        hi_z = cz + r
+        npx = int((hi_x - lo_x) / dx)
+        npy = int((hi_y - lo_y) / dx)
+        npz = int((hi_z - lo_z) / dx)
         return npx * npy * npz
 
     elif scene_name == "Double Dam":
-        npx1 = int((0.25 - 0.05) / spacing)
-        npy1 = int((0.65 - 0.05) / spacing)
-        npz1 = int((0.45 - 0.05) / spacing)
-        npx2 = int((0.95 - 0.75) / spacing)
-        npy2 = int((0.65 - 0.05) / spacing)
-        npz2 = int((0.95 - 0.55) / spacing)
+        npx1 = int((0.25 - 0.05) / dx)
+        npy1 = int((0.65 - 0.05) / dx)
+        npz1 = int((0.45 - 0.05) / dx)
+        npx2 = int((0.95 - 0.75) / dx)
+        npy2 = int((0.65 - 0.05) / dx)
+        npz2 = int((0.95 - 0.55) / dx)
         return npx1 * npy1 * npz1 + npx2 * npy2 * npz2
 
     return 0
@@ -111,28 +119,40 @@ class FluidSimulator:
     @ti.kernel
     def init_dam_break(self):
         dx = self.dx
-        spacing = dx * 0.55
         lo_x, hi_x = 0.05, 0.45
         lo_y, hi_y = 0.05, 0.85
         lo_z, hi_z = 0.05, 0.45
-        for i in range(self.num_particles):
-            npx = int((hi_x - lo_x) / spacing)
-            npy = int((hi_y - lo_y) / spacing)
-            npz = int((hi_z - lo_z) / spacing)
+        box_x = hi_x - lo_x
+        box_y = hi_y - lo_y
+        box_z = hi_z - lo_z
+
+        # Calculate maximum number of particles that can fit in the box
+        npx = int(box_x / dx)
+        npy = int(box_y / dx)
+        npz = int(box_z / dx)
+        max_particles = npx * npy * npz
+
+        # Use exactly max_particles (don't exceed)
+        for i in range(max_particles):
             ix = i % npx
             iy = (i // npx) % npy
             iz = i // (npx * npy)
+            # Center particles in cells
             self.pos[i] = [
-                lo_x + (ix + 0.5) * spacing,
-                lo_y + (iy + 0.5) * spacing,
-                lo_z + (iz + 0.5) * spacing,
+                lo_x + (ix + 0.5) * dx,
+                lo_y + (iy + 0.5) * dx,
+                lo_z + (iz + 0.5) * dx,
             ]
+            self.vel[i] = [0.0, 0.0, 0.0]
+
+        # Mark any extra particles (if num_particles > max_particles) as inactive
+        for i in range(max_particles, self.num_particles):
+            self.pos[i] = [-100.0, -100.0, -100.0]
             self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_drop(self):
         dx = self.dx
-        spacing = dx * 0.55
         cx, cy, cz = 0.5, 0.75, 0.5
         radius = 0.15
         lo_x = cx - radius
@@ -141,58 +161,86 @@ class FluidSimulator:
         hi_y = cy + radius
         lo_z = cz - radius
         hi_z = cz + radius
-        npx = int((hi_x - lo_x) / spacing)
-        npy = int((hi_y - lo_y) / spacing)
-        npz = int((hi_z - lo_z) / spacing)
-        for i in range(self.num_particles):
+
+        # Calculate maximum number of particles that can fit in the sphere
+        box_x = hi_x - lo_x
+        box_y = hi_y - lo_y
+        box_z = hi_z - lo_z
+        npx = int(box_x / dx)
+        npy = int(box_y / dx)
+        npz = int(box_z / dx)
+        max_particles = npx * npy * npz
+
+        # Only use particles within the sphere
+        count = 0
+        for i in range(max_particles):
             ix = i % npx
             iy = (i // npx) % npy
             iz = i // (npx * npy)
-            self.pos[i] = [
-                lo_x + (ix + 0.5) * spacing,
-                lo_y + (iy + 0.5) * spacing,
-                lo_z + (iz + 0.5) * spacing,
-            ]
+            x = lo_x + (ix + 0.5) * dx
+            y = lo_y + (iy + 0.5) * dx
+            z = lo_z + (iz + 0.5) * dx
+
+            # Check if particle is inside the sphere
+            dx_dist = x - cx
+            dy_dist = y - cy
+            dz_dist = z - cz
+            dist2 = dx_dist * dx_dist + dy_dist * dy_dist + dz_dist * dz_dist
+
+            if dist2 <= radius * radius:
+                self.pos[count] = [x, y, z]
+                self.vel[count] = [0.0, 0.0, 0.0]
+                count += 1
+
+        # Mark any extra particles as inactive
+        for i in range(count, self.num_particles):
+            self.pos[i] = [-100.0, -100.0, -100.0]
             self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_double_dam(self):
         dx = self.dx
-        spacing = dx * 0.55
         lo_x1, hi_x1 = 0.05, 0.25
         lo_y1, hi_y1 = 0.05, 0.65
         lo_z1, hi_z1 = 0.05, 0.45
-        npx1 = int((hi_x1 - lo_x1) / spacing)
-        npy1 = int((hi_y1 - lo_y1) / spacing)
-        npz1 = int((hi_z1 - lo_z1) / spacing)
+        npx1 = int((hi_x1 - lo_x1) / dx)
+        npy1 = int((hi_y1 - lo_y1) / dx)
+        npz1 = int((hi_z1 - lo_z1) / dx)
         count1 = npx1 * npy1 * npz1
         lo_x2, hi_x2 = 0.75, 0.95
         lo_y2, hi_y2 = 0.05, 0.65
         lo_z2, hi_z2 = 0.55, 0.95
-        npx2 = int((hi_x2 - lo_x2) / spacing)
-        npy2 = int((hi_y2 - lo_y2) / spacing)
-        npz2 = int((hi_z2 - lo_z2) / spacing)
+        npx2 = int((hi_x2 - lo_x2) / dx)
+        npy2 = int((hi_y2 - lo_y2) / dx)
+        npz2 = int((hi_z2 - lo_z2) / dx)
+
+        count = 0
         for i in range(self.num_particles):
-            if i < count1:
-                ix = i % npx1
-                iy = (i // npx1) % npy1
-                iz = i // (npx1 * npy1)
-                self.pos[i] = [
-                    lo_x1 + (ix + 0.5) * spacing,
-                    lo_y1 + (iy + 0.5) * spacing,
-                    lo_z1 + (iz + 0.5) * spacing,
-                ]
-            else:
-                idx = i - count1
+            if count >= count1 and count < count1 + npx2 * npy2 * npz2:
+                idx = count - count1
                 ix = idx % npx2
                 iy = (idx // npx2) % npy2
                 iz = idx // (npx2 * npy2)
-                self.pos[i] = [
-                    lo_x2 + (ix + 0.5) * spacing,
-                    lo_y2 + (iy + 0.5) * spacing,
-                    lo_z2 + (iz + 0.5) * spacing,
+                self.pos[count] = [
+                    lo_x2 + (ix + 0.5) * dx,
+                    lo_y2 + (iy + 0.5) * dx,
+                    lo_z2 + (iz + 0.5) * dx,
                 ]
-            self.vel[i] = [0.0, 0.0, 0.0]
+            elif count < count1:
+                ix = count % npx1
+                iy = (count // npx1) % npy1
+                iz = count // (npx1 * npy1)
+                self.pos[count] = [
+                    lo_x1 + (ix + 0.5) * dx,
+                    lo_y1 + (iy + 0.5) * dx,
+                    lo_z1 + (iz + 0.5) * dx,
+                ]
+            else:
+                # Mark extra particles as inactive
+                self.pos[count] = [-100.0, -100.0, -100.0]
+
+            self.vel[count] = [0.0, 0.0, 0.0]
+            count += 1
 
     @ti.kernel
     def init_colors(self):
@@ -713,6 +761,9 @@ class FluidSimulator:
         """Force all particles into the domain. Rescue stuck particles."""
         eps = 1e-6
         for i in range(self.num_particles):
+            if self.pos[i][0] < 0:
+                # Rescue stuck particles - move them to a safe position below the domain
+                self.pos[i] = [0.5, -10.0, 0.5]
             for d in ti.static(range(3)):
                 if self.pos[i][d] < eps:
                     self.pos[i][d] = eps
