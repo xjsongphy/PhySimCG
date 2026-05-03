@@ -234,11 +234,15 @@ def run_gui(
 
         # --- GUI: Debug timing ---
         if debug_mode:
-            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.28) as g:
+            stuck = sim.debug_count_stuck()
+            if stuck > 0:
+                sim.debug_color_stuck_red()
+            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.32) as g:
                 g.text(f"Frame:    {_ms_frame:>6.1f} ms")
                 g.text(f"FPS:      {1000.0 / max(_ms_frame, 0.01):.0f}")
                 g.text(f"Grid:     {sim.nx}x{sim.ny}x{sim.nz}")
                 g.text(f"Particles:{sim.num_particles}")
+                g.text(f"STUCK:    {stuck}  {'!!' if stuck else ''}")
                 g.text("--- avg per call (last ~1s) ---")
                 snap = _profiler.snapshot_and_reset()
                 for name, total, n, avg in snap[:8]:

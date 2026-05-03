@@ -34,6 +34,7 @@ class FLIPSimulator(FluidSimulator):
         self.integrate_and_collide(dt, gravity)
         if separate_particles:
             self.push_particles_apart(num_particle_iters)
+            self.clamp_all_positions()
             self.integrate_and_collide(0.0, 0.0)  # collide only (dt=0)
 
         self.clear_grid()
@@ -63,6 +64,7 @@ class FLIPSimulator(FluidSimulator):
         self.integrate_and_collide(half_dt, gravity)
         if sep_parts:
             self.push_particles_apart(npart_iter)
+            self.clamp_all_positions()
             self.integrate_and_collide(0.0, 0.0)
 
         self.clear_grid()
@@ -86,6 +88,7 @@ class FLIPSimulator(FluidSimulator):
         self.integrate_and_collide(half_dt, 0.0)
         if sep_parts:
             self.push_particles_apart(npart_iter)
+            self.clamp_all_positions()
             self.integrate_and_collide(0.0, 0.0)
 
         self.clear_grid()

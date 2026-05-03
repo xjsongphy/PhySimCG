@@ -89,6 +89,10 @@ class FluidSimulator:
         self._cg_rdotr = ti.field(dtype=float, shape=(1,))
         self._cg_pAp = ti.field(dtype=float, shape=(1,))
 
+        # Debug: stuck particle tracking
+        self._stuck_count = ti.field(dtype=int, shape=(1,))
+        self._prev_pos = ti.Vector.field(3, dtype=float, shape=num_particles)
+
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
         self.obstacle_count = ti.field(dtype=int, shape=())
@@ -675,3 +679,37 @@ class FluidSimulator:
                 self.color[i] = [0.2, 0.5, 1.0]
             else:
                 self.color[i] = [0.1, 0.1, 0.15]
+
+    # ---- Debug ----
+
+    @ti.kernel
+    def debug_save_positions(self):
+        for i in range(self.num_particles):
+            self._prev_pos[i] = self.pos[i]
+
+    @ti.kernel
+    def debug_count_stuck(self) -> int:
+        """Count particles with pos < 0 (permanently stuck)."""
+        count = 0
+        for i in range(self.num_particles):
+            if self.pos[i][0] < 0:
+                count += 1
+        return count
+
+    @ti.kernel
+    def debug_color_stuck_red(self):
+        """Color stuck (pos < 0) particles bright red for visibility."""
+        for i in range(self.num_particles):
+            if self.pos[i][0] < 0:
+                self.color[i] = [1.0, 0.0, 0.0]
+
+    @ti.kernel
+    def clamp_all_positions(self):
+        """Force all particles into the domain. Rescue stuck particles."""
+        eps = 1e-6
+        for i in range(self.num_particles):
+            for d in ti.static(range(3)):
+                if self.pos[i][d] < eps:
+                    self.pos[i][d] = eps
+                elif self.pos[i][d] > 1.0 - eps:
+                    self.pos[i][d] = 1.0 - eps
