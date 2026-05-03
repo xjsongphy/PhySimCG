@@ -2,6 +2,37 @@ import taichi as ti
 import taichi.math as tm
 
 
+def scene_particle_count(scene_name: str, nx: int) -> int:
+    """Compute exact particle count for a scene at given grid resolution."""
+    dx = 1.0 / nx
+    spacing = dx * 0.55
+
+    if scene_name == "Dam Break":
+        npx = int((0.45 - 0.05) / spacing)
+        npy = int((0.85 - 0.05) / spacing)
+        npz = int((0.45 - 0.05) / spacing)
+        return npx * npy * npz
+
+    elif scene_name == "Drop":
+        cx, cy, cz = 0.5, 0.75, 0.5
+        r = 0.15
+        npx = int((2 * r) / spacing)
+        npy = int((2 * r) / spacing)
+        npz = int((2 * r) / spacing)
+        return npx * npy * npz
+
+    elif scene_name == "Double Dam":
+        npx1 = int((0.25 - 0.05) / spacing)
+        npy1 = int((0.65 - 0.05) / spacing)
+        npz1 = int((0.45 - 0.05) / spacing)
+        npx2 = int((0.95 - 0.75) / spacing)
+        npy2 = int((0.65 - 0.05) / spacing)
+        npz2 = int((0.95 - 0.55) / spacing)
+        return npx1 * npy1 * npz1 + npx2 * npy2 * npz2
+
+    return 0
+
+
 @ti.data_oriented
 class FluidSimulator:
     """Shared data structures and kernels for all fluid simulation methods.
@@ -45,6 +76,11 @@ class FluidSimulator:
         self.grid_v_weight = ti.field(dtype=float, shape=(nx, ny + 1, nz))
         self.grid_w_weight = ti.field(dtype=float, shape=(nx, ny, nz + 1))
 
+        # Neighbor grid for particle separation
+        self._max_per_cell = 20
+        self.grid_particle_count = ti.field(dtype=int, shape=(nx, ny, nz))
+        self.grid_particle_ids = ti.field(dtype=int, shape=(nx, ny, nz, self._max_per_cell))
+
         # Obstacle (sphere)
         self.obstacle_pos = ti.Vector.field(3, dtype=float, shape=(1,))
         self.obstacle_vel = ti.Vector.field(3, dtype=float, shape=(1,))
@@ -57,7 +93,7 @@ class FluidSimulator:
     @ti.kernel
     def init_dam_break(self):
         dx = self.dx
-        spacing = dx * 0.5
+        spacing = dx * 0.55
         lo_x, hi_x = 0.05, 0.45
         lo_y, hi_y = 0.05, 0.85
         lo_z, hi_z = 0.05, 0.45
@@ -76,13 +112,13 @@ class FluidSimulator:
                 ]
                 self.vel[i] = [0.0, 0.0, 0.0]
             else:
-                self.pos[i] = [-1.0, -1.0, -1.0]
+                self.pos[i] = [-100.0, -100.0, -100.0]
                 self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_drop(self):
         dx = self.dx
-        spacing = dx * 0.5
+        spacing = dx * 0.55
         cx, cy, cz = 0.5, 0.75, 0.5
         radius = 0.15
         lo_x = cx - radius
@@ -94,29 +130,21 @@ class FluidSimulator:
         npx = int((hi_x - lo_x) / spacing)
         npy = int((hi_y - lo_y) / spacing)
         npz = int((hi_z - lo_z) / spacing)
-        total = npx * npy * npz
         for i in range(self.num_particles):
-            if i < total:
-                ix = i % npx
-                iy = (i // npx) % npy
-                iz = i // (npx * npy)
-                x = lo_x + (ix + 0.5) * spacing
-                y = lo_y + (iy + 0.5) * spacing
-                z = lo_z + (iz + 0.5) * spacing
-                if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= radius ** 2:
-                    self.pos[i] = [x, y, z]
-                    self.vel[i] = [0.0, 0.0, 0.0]
-                else:
-                    self.pos[i] = [-1.0, -1.0, -1.0]
-                    self.vel[i] = [0.0, 0.0, 0.0]
-            else:
-                self.pos[i] = [-1.0, -1.0, -1.0]
-                self.vel[i] = [0.0, 0.0, 0.0]
+            ix = i % npx
+            iy = (i // npx) % npy
+            iz = i // (npx * npy)
+            self.pos[i] = [
+                lo_x + (ix + 0.5) * spacing,
+                lo_y + (iy + 0.5) * spacing,
+                lo_z + (iz + 0.5) * spacing,
+            ]
+            self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_double_dam(self):
         dx = self.dx
-        spacing = dx * 0.5
+        spacing = dx * 0.55
         lo_x1, hi_x1 = 0.05, 0.25
         lo_y1, hi_y1 = 0.05, 0.65
         lo_z1, hi_z1 = 0.05, 0.45
@@ -153,8 +181,16 @@ class FluidSimulator:
                 ]
                 self.vel[i] = [0.0, 0.0, 0.0]
             else:
-                self.pos[i] = [-1.0, -1.0, -1.0]
+                self.pos[i] = [-100.0, -100.0, -100.0]
                 self.vel[i] = [0.0, 0.0, 0.0]
+
+    @ti.kernel
+    def init_colors(self):
+        for i in range(self.num_particles):
+            if self.pos[i][0] >= 0:
+                self.color[i] = [0.2, 0.5, 1.0]
+            else:
+                self.color[i] = [0.1, 0.1, 0.15]
 
     # ---- Cell Type Management ----
 
@@ -253,30 +289,67 @@ class FluidSimulator:
                 if dist < obs_r and dist > 1e-8:
                     n = diff / dist
                     self.pos[i] = obs_pos + n * obs_r
-                    vn = self.vel[i].dot(n)
+                    obs_vel = self.obstacle_vel[0]
+                    rel_vel = self.vel[i] - obs_vel
+                    vn = rel_vel.dot(n)
                     if vn < 0:
-                        self.vel[i] = self.vel[i] - n * vn
+                        self.vel[i] = self.vel[i] - n * vn + obs_vel * 0.5
+
+    def push_particles_apart(self, num_iters: int):
+        for _ in range(num_iters):
+            self._clear_neighbor_grid()
+            self._build_neighbor_grid()
+            self._separate_pass()
 
     @ti.kernel
-    def push_particles_apart(self, num_iters: int):
+    def _clear_neighbor_grid(self):
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            self.grid_particle_count[i, j, k] = 0
+
+    @ti.kernel
+    def _build_neighbor_grid(self):
         dx = self.dx
-        min_dist = dx * 0.5
+        for p in range(self.num_particles):
+            if self.pos[p][0] < 0:
+                continue
+            ci = int(self.pos[p][0] / dx)
+            cj = int(self.pos[p][1] / dx)
+            ck = int(self.pos[p][2] / dx)
+            ci = ti.max(0, ti.min(self.nx - 1, ci))
+            cj = ti.max(0, ti.min(self.ny - 1, cj))
+            ck = ti.max(0, ti.min(self.nz - 1, ck))
+            slot = ti.atomic_add(self.grid_particle_count[ci, cj, ck], 1)
+            if slot < self._max_per_cell:
+                self.grid_particle_ids[ci, cj, ck, slot] = p
+
+    @ti.kernel
+    def _separate_pass(self):
+        dx = self.dx
+        min_dist = dx * 0.6
         min_dist2 = min_dist * min_dist
-        for iter in range(num_iters):
-            for i in range(self.num_particles):
-                if self.pos[i][0] < 0:
-                    continue
-                for j in range(i + 1, self.num_particles):
-                    if self.pos[j][0] < 0:
-                        continue
-                    diff = self.pos[i] - self.pos[j]
-                    d2 = diff.dot(diff)
-                    if d2 < min_dist2 and d2 > 1e-12:
-                        d = ti.sqrt(d2)
-                        n = diff / d
-                        correction = n * (min_dist - d) * 0.5
-                        self.pos[i] += correction
-                        self.pos[j] -= correction
+        for p in range(self.num_particles):
+            if self.pos[p][0] < 0:
+                continue
+            ci = int(self.pos[p][0] / dx)
+            cj = int(self.pos[p][1] / dx)
+            ck = int(self.pos[p][2] / dx)
+            for di, dj, dk in ti.static(ti.ndrange(3, 3, 3)):
+                ni = ci + di - 1
+                nj = cj + dj - 1
+                nk = ck + dk - 1
+                if 0 <= ni < self.nx and 0 <= nj < self.ny and 0 <= nk < self.nz:
+                    cnt = self.grid_particle_count[ni, nj, nk]
+                    for s in range(ti.i32(self._max_per_cell)):
+                        if s >= cnt:
+                            continue
+                        q = self.grid_particle_ids[ni, nj, nk, s]
+                        if q != p:
+                            diff = self.pos[p] - self.pos[q]
+                            d2 = diff.dot(diff)
+                            if d2 < min_dist2 and d2 > 1e-12:
+                                d = ti.sqrt(d2)
+                                n_dir = diff / d
+                                self.pos[p] += n_dir * (min_dist - d) * 0.7
 
     @ti.kernel
     def update_particle_density(self):
@@ -444,7 +517,7 @@ class FluidSimulator:
                 t = ti.min(speed / 5.0, 1.0)
                 self.color[i] = [0.2 + 0.8 * t, 0.5 + 0.5 * t, 1.0]
             else:
-                self.color[i] = [0, 0, 0]
+                self.color[i] = [0.1, 0.1, 0.15]
 
     @ti.kernel
     def update_colors_by_density(self):
@@ -460,7 +533,7 @@ class FluidSimulator:
                 else:
                     self.color[i] = [0.2, 0.5, 1.0]
             else:
-                self.color[i] = [0, 0, 0]
+                self.color[i] = [0.1, 0.1, 0.15]
 
     @ti.kernel
     def update_colors_uniform(self):
@@ -468,4 +541,4 @@ class FluidSimulator:
             if self.pos[i][0] >= 0:
                 self.color[i] = [0.2, 0.5, 1.0]
             else:
-                self.color[i] = [0, 0, 0]
+                self.color[i] = [0.1, 0.1, 0.15]

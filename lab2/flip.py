@@ -19,10 +19,10 @@ class FLIPSimulator(FluidSimulator):
         flip_ratio: float = 0.95,
         gravity: float = -9.8,
         num_pressure_iters: int = 40,
-        num_particle_iters: int = 2,
+        num_particle_iters: int = 1,
         over_relaxation: float = 1.9,
         compensate_drift: bool = True,
-        separate_particles: bool = False,
+        separate_particles: bool = True,
     ):
         self.integrate_particles(dt, gravity)
         self.handle_particle_collisions()
