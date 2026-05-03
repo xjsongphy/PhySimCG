@@ -9,11 +9,11 @@ def run(debug=False):
     ti.init(arch=ti.vulkan)
 
     nx, ny, nz = 24, 48, 24
-    scene = "Dam Break"
+    scene = "Double Dam"
     num_particles = scene_particle_count(scene, nx)
 
     sim = FLIPSimulator(nx, ny, nz, num_particles)
-    sim.init_dam_break()
+    sim.init_double_dam()
     sim.relabel_and_density()
     sim.init_colors()
     sim.store_initial_density()
@@ -52,7 +52,7 @@ def run(debug=False):
             from lab2.surface import build_surface_mesh
             verts, tris = build_surface_mesh(
                 sim.pos, sim.nx, sim.ny, sim.nz, sim.dx,
-                threshold=0.3, mc_res=2,
+                threshold=0.4, mc_res=1,
             )
             if verts is not None and len(verts) > 0:
                 # Resize fields if needed
@@ -73,7 +73,7 @@ def run(debug=False):
         scene_obj.point_light(pos=(0.5, 2.0, 1.5), color=(1.0, 1.0, 1.0))
         scene_obj.ambient_light((0.6, 0.6, 0.7))
 
-        # Fluid particles (semi-transparent)
+        # Fluid particles
         scene_obj.particles(
             sim.pos,
             radius=sim.dx * 0.25,
@@ -94,6 +94,9 @@ def run(debug=False):
                 paused = not paused
             g.text(f"Particles: {sim.num_particles}")
             g.text(f"Mesh: {'ON' if has_mesh else 'building...'}")
+            if has_mesh:
+                g.text(f"Verts: {mesh_verts.shape[0]}")
+                g.text(f"Tris: {mesh_tris.shape[0] // 3}")
 
         window.show()
 

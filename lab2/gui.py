@@ -246,8 +246,7 @@ def run_gui(
             stuck = sim.debug_count_stuck()
             if stuck > 0:
                 sim.debug_color_stuck_red()
-            vol_ratio = sim.compute_fluid_volume()
-            _vol_history.append(vol_ratio)
+            _vol_history.append(sim._fluid_vol_ratio[0])
             if len(_vol_history) > 200:
                 _vol_history.pop(0)
             with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.38) as g:
@@ -256,7 +255,7 @@ def run_gui(
                 g.text(f"Grid:     {sim.nx}x{sim.ny}x{sim.nz}")
                 g.text(f"Particles:{sim.num_particles}")
                 g.text(f"STUCK:    {stuck}  {'!!' if stuck else ''}")
-                g.text(f"Volume:   {vol_ratio:.3f}")
+                g.text(f"Volume:   {sim._fluid_vol_ratio[0]:.3f}")
                 g.text(f"Time:     {sim_time:.2f} s")
                 # Mini V-t graph (text-based)
                 g.text("--- V-t (volume ratio) ---")
@@ -404,7 +403,6 @@ def run_gui(
                     dt=current_dt,
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
-                    use_cg=use_cg,
                 )
             sim_time += current_dt * num_substeps
         if debug_mode:

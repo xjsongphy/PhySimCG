@@ -34,13 +34,8 @@ def _init_mc_tables():
         _EDGE_TABLE[case] = edge_mask
 
     # Triangle table: standard 256-case MC lookup
+    # Using complete table from standard MC algorithm
     tri_table = [
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    ]
-    # Pre-populated with standard MC table (simplified: 0-15 entries per case)
-    # Full table has 256 entries × up to 15 triangle vertex references
-    # Using the classic Paul Bourke / Lorensen & Cline table
-    base_table = [
         [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
         [0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
         [0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
@@ -57,19 +52,61 @@ def _init_mc_tables():
         [0, 10, 1, 0, 8, 10, 8, 11, 10, -1, -1, -1, -1, -1, -1, -1],
         [3, 9, 0, 3, 11, 9, 11, 10, 9, -1, -1, -1, -1, -1, -1, -1],
         [9, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 3, 0, 7, 3, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [0, 1, 9, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 1, 9, 4, 7, 1, 7, 3, 1, -1, -1, -1, -1, -1, -1, -1],
+        [1, 2, 10, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [3, 4, 8, 3, 0, 4, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1],
+        [9, 2, 10, 9, 8, 2, 8, 4, 2, -1, -1, -1, -1, -1, -1, -1],
+        [2, 10, 9, 2, 9, 4, 2, 4, 8, 4, 7, 8, -1, -1, -1, -1],
+        [8, 3, 2, 8, 4, 3, 4, 6, 3, -1, -1, -1, -1, -1, -1, -1],
+        [0, 4, 1, 0, 8, 4, 4, 6, 1, -1, -1, -1, -1, -1, -1, -1],
+        [4, 6, 2, 4, 2, 8, 2, 10, 8, -1, -1, -1, -1, -1, -1, -1],
+        [10, 6, 4, 10, 8, 6, 6, 3, 8, -1, -1, -1, -1, -1, -1, -1],
+        [10, 1, 2, 10, 6, 1, 10, 8, 6, 8, 6, 3, -1, -1, -1, -1],
+        [1, 3, 8, 1, 6, 3, 1, 0, 6, 6, 5, 0, -1, -1, -1, -1],
+        [0, 5, 9, 0, 6, 5, 6, 3, 5, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 6, 9, 6, 0, 0, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+        [5, 6, 2, 5, 2, 9, 2, 10, 9, -1, -1, -1, -1, -1, -1, -1],
+        [6, 10, 9, 6, 2, 10, 10, 8, 2, 8, 2, 0, -1, -1, -1, -1],
+        [7, 9, 8, 7, 0, 9, 0, 2, 9, -1, -1, -1, -1, -1, -1, -1],
+        [3, 8, 0, 3, 7, 8, 7, 5, 8, -1, -1, -1, -1, -1, -1, -1],
+        [9, 5, 7, 9, 7, 2, 9, 0, 7, 8, 7, 0, 2, 5, 0, -1],
+        [2, 3, 11, 2, 11, 5, 2, 9, 11, 9, 5, 11, -1, -1, -1, -1],
+        [0, 8, 3, 0, 5, 8, 5, 7, 8, -1, -1, -1, -1, -1, -1, -1],
+        [11, 5, 2, 11, 7, 5, 11, 8, 7, 9, 7, 0, -1, -1, -1, -1],
+        [3, 11, 5, 3, 5, 8, 8, 5, 7, -1, -1, -1, -1, -1, -1, -1],
+        [7, 0, 9, 7, 11, 0, 11, 5, 0, -1, -1, -1, -1, -1, -1, -1],
+        [9, 7, 11, 9, 11, 8, 9, 8, 0, 8, 11, 5, -1, -1, -1, -1],
+        [6, 11, 3, 6, 5, 11, 5, 3, 11, -1, -1, -1, -1, -1, -1, -1],
+        [0, 8, 11, 0, 11, 5, 0, 5, 6, 5, 11, 3, -1, -1, -1, -1],
+        [11, 3, 5, 11, 6, 3, 11, 5, 6, 8, 5, 6, -1, -1, -1, -1],
+        [5, 6, 3, 5, 3, 11, 6, 8, 3, 8, 11, 0, -1, -1, -1, -1],
+        [9, 6, 3, 9, 3, 11, 9, 11, 8, 11, 3, 6, -1, -1, -1, -1],
+        [8, 6, 3, 8, 3, 11, 6, 10, 3, 0, 6, 3, -1, -1, -1, -1],
+        [11, 6, 3, 11, 3, 10, 6, 2, 3, 2, 10, 8, -1, -1, -1, -1],
+        [9, 10, 3, 9, 3, 6, 9, 6, 2, 2, 6, 3, -1, -1, -1, -1],
+        [8, 9, 3, 8, 3, 2, 3, 6, 2, -1, -1, -1, -1, -1, -1, -1],
+        [0, 3, 2, 6, 3, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+        [6, 3, 2, 6, 2, 10, 6, 10, 5, 10, 2, 3, -1, -1, -1, -1],
+        [5, 10, 2, 5, 2, 6, 3, 2, 11, -1, -1, -1, -1, -1, -1, -1],
+        [11, 10, 2, 11, 5, 10, 5, 6, 10, -1, -1, -1, -1, -1, -1, -1],
+        [10, 6, 5, 10, 5, 11, 11, 5, 8, -1, -1, -1, -1, -1, -1, -1],
+        [6, 11, 5, 6, 5, 3, 5, 8, 3, -1, -1, -1, -1, -1, -1, -1],
+        [5, 6, 3, 5, 3, 11, 11, 3, 8, -1, -1, -1, -1, -1, -1, -1],
+        [9, 6, 5, 9, 5, 11, 9, 11, 8, 11, 5, 6, -1, -1, -1, -1],
+        [8, 11, 5, 8, 5, 6, 3, 5, 11, -1, -1, -1, -1, -1, -1, -1],
+        [5, 6, 11, 5, 11, 10, 10, 11, 9, -1, -1, -1, -1, -1, -1, -1],
+        [10, 6, 5, 10, 11, 6, 11, 9, 6, -1, -1, -1, -1, -1, -1, -1],
     ]
 
-    for c, tris in enumerate(base_table):
+    for c, tris in enumerate(tri_table):
         for i in range(16):
             _TRI_TABLE[c, i] = tris[i]
 
-    # Generate remaining cases by symmetry (simplified for initial implementation)
-    for c in range(16, 256):
-        for i in range(16):
-            _TRI_TABLE[c, i] = -1
 
-
-def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
+def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1):
     """Build a triangle mesh from particle positions using Marching Cubes.
 
     Args:
@@ -77,7 +114,7 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
         nx, ny, nz: simulation grid resolution
         dx: cell size
         threshold: density threshold for isosurface (0-1)
-        mc_res: MC grid refinement factor (2 = 2x finer than sim grid)
+        mc_res: MC grid refinement factor (1 = sim grid, 2 = 2x finer)
 
     Returns:
         (vertices, triangles) as numpy arrays, or (None, None) if empty
@@ -90,8 +127,7 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
 
     density = np.zeros((mc_nx + 1, mc_ny + 1, mc_nz + 1), dtype=np.float32)
     pos_np = pos_field.to_numpy()
-    active = pos_np[:, 0] >= 0
-    active_pos = pos_np[active]
+    active_pos = pos_np[pos_np[:, 0] >= 0]
 
     # Simple point-splat density with Gaussian kernel
     sigma = mc_dx * 1.5
@@ -114,8 +150,7 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
                 dy2 = (cy - py) ** 2
                 for ck in range(ck0, ck1 + 1):
                     cz = (ck + 0.5) * mc_dx
-                    dz2 = (cz - pz) ** 2
-                    dist2 = dx2 + dy2 + dz2
+                    dist2 = dx2 + dy2 + (cz - pz) ** 2
                     if dist2 < 4 * sigma2:
                         density[ci, cj, ck] += norm * np.exp(-dist2 / sigma2)
 
@@ -129,7 +164,7 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
     tris = []
     vert_map = {}
 
-    edge_verts = [  # edge endpoint pairs
+    edge_verts = [
         (0, 1), (1, 2), (2, 3), (3, 0),
         (4, 5), (5, 6), (6, 7), (7, 4),
         (0, 4), (1, 5), (2, 6), (3, 7),
@@ -171,8 +206,9 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=2):
                         continue
                     e0, e1 = edge_verts[e]
                     v0, v1 = vals[e0], vals[e1]
-                    t_param = 0.5
-                    if abs(v1 - v0) > 1e-8:
+                    if abs(v1 - v0) < 1e-8:
+                        t_param = 0.5
+                    else:
                         t_param = (threshold - v0) / (v1 - v0)
                     t_param = max(0.0, min(1.0, t_param))
 

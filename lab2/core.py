@@ -96,6 +96,7 @@ class FluidSimulator:
         # Volume tracking
         self._fluid_cell_count = ti.field(dtype=int, shape=(1,))
         self._init_fluid_cells = ti.field(dtype=int, shape=(1,))
+        self._fluid_vol_ratio = ti.field(dtype=float, shape=(1,))
 
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
@@ -719,17 +720,18 @@ class FluidSimulator:
                     self.pos[i][d] = 1.0 - eps
 
     @ti.kernel
-    def compute_fluid_volume(self) -> float:
-        """Count fluid cells as a proxy for volume. Returns ratio to initial."""
+    def compute_fluid_volume(self):
+        """Count fluid cells as a proxy for volume. Store ratio to init in _fluid_vol_ratio."""
         count = 0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             if self.cell_type[i, j, k] == 0:
                 count += 1
         self._fluid_cell_count[0] = count
         init = self._init_fluid_cells[0]
+        ratio = 1.0 if init > 0 else 1.0
         if init > 0:
-            return float(count) / float(init)
-        return 1.0
+            ratio = float(count) / float(init)
+        self._fluid_vol_ratio[0] = ratio
 
     def save_init_volume(self):
         """Call once after initialization to save initial fluid cell count."""
