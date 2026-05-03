@@ -3,7 +3,7 @@ from lab2.eulerian import EulerianSimulator
 from lab2.gui import run_gui
 
 
-def run():
+def run(debug=False):
     ti.init(arch=ti.vulkan)
 
     nx, ny, nz = 32, 64, 32
@@ -22,6 +22,7 @@ def run():
         num_substeps=1,
         gravity=-9.8,
         window_title="Lab2 - B3 Eulerian Fluid",
+        debug=debug,
     )
 
 

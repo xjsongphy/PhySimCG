@@ -3,6 +3,7 @@ import numpy as np
 import taichi as ti
 from lab2.core import FluidSimulator, scene_particle_count
 from lab2.flip import FLIPSimulator
+from collections import defaultdict
 
 
 def _get_screen_resolution() -> tuple:
@@ -19,11 +20,33 @@ def _get_screen_resolution() -> tuple:
 
 SCENES = ["Dam Break", "Drop", "Double Dam"]
 OBSTACLES = {
-    "None":        (0.0, (0.5, 0.5, 0.5)),
-    "1 Sphere":    (0.06, (0.5, 0.5, 0.5)),
-    "1 Big Sphere":(0.10, (0.5, 0.5, 0.5)),
+    "None":          [],
+    "1 Sphere":      [(0.06, (0.5, 0.5, 0.5))],
+    "2 Spheres":     [(0.05, (0.35, 0.6, 0.35)), (0.05, (0.65, 0.4, 0.65))],
+    "3 Spheres":     [(0.045, (0.3, 0.65, 0.3)), (0.045, (0.7, 0.45, 0.7)),
+                      (0.045, (0.5, 0.55, 0.5))],
+    "1 Big + 1 Small":[(0.09, (0.5, 0.55, 0.5)), (0.04, (0.7, 0.5, 0.3))],
 }
-COLOR_MODES = ["Speed", "Density", "Uniform"]
+class _Profiler:
+    """Lightweight frame profiler. Only active when debug_mode is True."""
+    def __init__(self):
+        self._cum = defaultdict(lambda: [0.0, 0])  # name → [total_ms, count]
+
+    def record(self, name: str, ms: float):
+        e = self._cum[name]
+        e[0] += ms
+        e[1] += 1
+
+    def snapshot_and_reset(self):
+        out = []
+        for name, (total, n) in sorted(self._cum.items()):
+            out.append((name, total, n, total / max(n, 1)))
+        self._cum.clear()
+        return out
+
+_profiler = _Profiler()
+
+# B1: COLOR_MODES = ["Speed", "Density", "Uniform"]
 RESOLUTIONS = {
     "Low (16)":  (16, 32, 16),
     "Med (24)":  (24, 48, 24),
@@ -40,14 +63,14 @@ def _create_sim(scene_name, nx, ny, nz, obstacle_name):
         sim.init_drop()
     elif scene_name == "Double Dam":
         sim.init_double_dam()
-    sim.init_cell_types()
+    sim.relabel_and_density()
     sim.init_colors()
-    sim.update_particle_density()
     sim.store_initial_density()
-    obs_r, obs_pos = OBSTACLES.get(obstacle_name, OBSTACLES["None"])
-    if obs_r > 0:
-        sim.obstacle_radius[None] = obs_r
-        sim.obstacle_pos[0] = obs_pos
+    obs_list = OBSTACLES.get(obstacle_name, OBSTACLES["None"])
+    sim.obstacle_count[None] = len(obs_list)
+    for o, (r_i, pos_i) in enumerate(obs_list):
+        sim.obstacle_radius[o] = r_i
+        sim.obstacle_pos[o] = pos_i
     return sim
 
 
@@ -74,6 +97,7 @@ def run_gui(
     gravity: float = -9.8,
     window_title: str = "FLIP Fluid Simulation",
     window_size: tuple = None,
+    debug: bool = False,
 ):
     if window_size is None:
         screen_w, screen_h = _get_screen_resolution()
@@ -103,7 +127,7 @@ def run_gui(
     current_flip_ratio = flip_ratio
     current_gravity = gravity
     current_scene = SCENES[0]
-    current_color_mode = COLOR_MODES[0]
+    # B1: current_color_mode = none
     current_res_name = "Med (24)"
     obstacle_name = "None"
 
@@ -113,14 +137,13 @@ def run_gui(
 
     # Deferred recreation + debug timers
     _recreate = None
-    debug_mode = False
-    _ms_recreate = 0.0
-    _ms_substep = 0.0
-    _ms_render = 0.0
+    debug_mode = debug
+    _prof_frame = 0
     _ms_frame = 0.0
 
     while window.running:
-        t_frame = time.perf_counter()
+        if debug_mode:
+            t_frame = time.perf_counter()
 
         # ==== Deferred simulator recreation ====
         if _recreate is not None:
@@ -133,13 +156,15 @@ def run_gui(
             substep_fn = sim.substep
             dx = sim.dx
             _recreate = None
-            _ms_recreate = (time.perf_counter() - t0) * 1000
+            if debug_mode:
+                _profiler.record("recreate", (time.perf_counter() - t0) * 1000)
 
         gui = window.get_gui()
 
         # --- GUI: Scene ---
         with gui.sub_window("Scene", 0.02, 0.02, 0.22, 0.28) as g:
             g.text("=== Scene ===")
+            g.text(f"  Current: {current_scene}")
             for name in SCENES:
                 if g.button(name):
                     _recreate = (name, sim.nx, sim.ny, sim.nz)
@@ -167,40 +192,41 @@ def run_gui(
         # --- GUI: Obstacle ---
         with gui.sub_window("Obstacle", 0.02, 0.62, 0.22, 0.22) as g:
             g.text("=== Obstacle ===")
+            g.text(f"  Current: {obstacle_name}")
             for name in OBSTACLES:
                 if g.button(name):
                     obstacle_name = name
-                    obs_r, obs_pos = OBSTACLES[name]
-                    if obs_r > 0:
-                        sim.obstacle_radius[None] = obs_r
-                        sim.obstacle_pos[0] = obs_pos
-                    else:
-                        sim.obstacle_radius[None] = 0.0
+                    obs_list = OBSTACLES[name]
+                    sim.obstacle_count[None] = len(obs_list)
+                    for o, (r_i, pos_i) in enumerate(obs_list):
+                        sim.obstacle_radius[o] = r_i
+                        sim.obstacle_pos[o] = pos_i
 
-        # --- GUI: Color ---
-        with gui.sub_window("Color", 0.26, 0.02, 0.14, 0.18) as g:
-            g.text("=== Color ===")
-            for mode in COLOR_MODES:
-                if g.button(mode):
-                    current_color_mode = mode
+        # --- GUI: Debug toggle ---
+        with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.08) as g:
+            g.text("=== Debug ===")
             if g.button("Debug ON" if not debug_mode else "Debug OFF"):
                 debug_mode = not debug_mode
 
         # --- GUI: Debug timing ---
         if debug_mode:
-            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.20) as g:
-                g.text(f"Recreate: {_ms_recreate:>6.1f} ms")
-                g.text(f"Substeps: {_ms_substep:>6.1f} ms")
-                g.text(f"Render:   {_ms_render:>6.1f} ms")
+            with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.28) as g:
                 g.text(f"Frame:    {_ms_frame:>6.1f} ms")
                 g.text(f"FPS:      {1000.0 / max(_ms_frame, 0.01):.0f}")
-                g.text(f"Particles:{sim.num_particles}")
                 g.text(f"Grid:     {sim.nx}x{sim.ny}x{sim.nz}")
+                g.text(f"Particles:{sim.num_particles}")
+                g.text("--- avg per call (last ~1s) ---")
+                snap = _profiler.snapshot_and_reset()
+                for name, total, n, avg in snap[:8]:
+                    g.text(f"  {name:.<12s}{avg:6.1f}ms x{n}")
 
         # ==== Camera & Obstacle Interaction ====
         cx, cy = window.get_cursor_pos()
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
+
+        # Skip camera controls when cursor is over GUI panels
+        over_gui = (cx < 0.42 and cy < 0.88)
 
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
@@ -226,13 +252,13 @@ def run_gui(
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
 
-            if lmb:
+            if lmb and not over_gui:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
                 cam_pitch = np.clip(cam_pitch, 0.05, 1.5)
 
             # RMB: Pan
-            if rmb:
+            if rmb and not over_gui:
                 pan_speed = cam_dist * 0.8
                 pan_x = dx_mouse * pan_speed
                 pan_y = -dy_mouse * pan_speed
@@ -260,10 +286,10 @@ def run_gui(
         prev_cursor_valid = True
 
         # ==== Simulation ====
-        t_sim = time.perf_counter()
+        if debug_mode:
+            t_sim = time.perf_counter()
         if not paused:
-            obs_r = sim.obstacle_radius[None]
-            if obs_r > 0:
+            if sim.obstacle_count[None] > 0:
                 sim.mark_obstacle_cells()
             for _ in range(num_substeps):
                 substep_fn(
@@ -271,18 +297,19 @@ def run_gui(
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
                 )
+        if debug_mode:
+            _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 
         # ==== Colors ====
-        if current_color_mode == "Speed":
-            sim.update_default_colors()
-        elif current_color_mode == "Density":
-            sim.update_colors_by_density()
-        else:
-            sim.update_colors_uniform()
+        if debug_mode:
+            t_col = time.perf_counter()
+        sim.update_default_colors()
+        if debug_mode:
+            _profiler.record("color", (time.perf_counter() - t_col) * 1000)
 
         # ==== Render ====
-        t_render = time.perf_counter()
-        _ms_substep = (t_render - t_sim) * 1000
+        if debug_mode:
+            t_rend = time.perf_counter()
         scene.set_camera(camera)
         scene.point_light(pos=(0.5, 2.0, 1.5), color=(1.0, 1.0, 1.0))
         scene.ambient_light((0.7, 0.7, 0.75))
@@ -297,17 +324,22 @@ def run_gui(
             per_vertex_color=sim.color,
         )
 
-        # Obstacle
-        obs_r = sim.obstacle_radius[None]
-        if obs_r > 0:
-            scene.particles(
-                sim.obstacle_pos,
-                radius=obs_r * 0.95,
-                color=(0.8, 0.3, 0.3),
-            )
+        # Obstacles
+        obs_count = sim.obstacle_count[None]
+        if obs_count > 0:
+            for o in range(min(obs_count, 4)):
+                obs_r = sim.obstacle_radius[o]
+                if obs_r > 0:
+                    obs_pos_field = ti.Vector.field(3, dtype=float, shape=(1,))
+                    obs_pos_field[0] = sim.obstacle_pos[o]
+                    scene.particles(
+                        obs_pos_field,
+                        radius=obs_r * 0.95,
+                        color=(0.8, 0.3, 0.3),
+                    )
 
         canvas.scene(scene)
         window.show()
-        t_end = time.perf_counter()
-        _ms_render = (t_end - t_render) * 1000
-        _ms_frame = (t_end - t_frame) * 1000
+        if debug_mode:
+            _profiler.record("render", (time.perf_counter() - t_rend) * 1000)
+            _ms_frame = (time.perf_counter() - t_frame) * 1000
