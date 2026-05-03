@@ -77,7 +77,7 @@ def run(debug=False):
         # Fluid particles
         scene_obj.particles(
             sim.pos,
-            radius=sim.dx * 0.25,
+            radius=sim.dx * 0.15,
             per_vertex_color=sim.color,
         )
 
