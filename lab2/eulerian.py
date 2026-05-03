@@ -38,6 +38,8 @@ class EulerianSimulator(FluidSimulator):
         self.solve_incompressibility(num_pressure_iters, dt, over_relaxation, False)
         self.set_boundary_velocity()
         self.advect_density(dt)
+        # Copy new density to density after substep
+        self.density.copy_from(self.density_new)
 
     # ---- Semi-Lagrangian Advection ----
 
@@ -88,7 +90,7 @@ class EulerianSimulator(FluidSimulator):
             px = cx - dt * vel[0]
             py = cy - dt * vel[1]
             pz = cz - dt * vel[2]
-            self.density[i, j, k] = self._interp_density(px, py, pz, dx)
+            self.density_new[i, j, k] = self._interp_density(px, py, pz, dx)
 
     @ti.kernel
     def apply_gravity(self, dt: float, gravity: float):
@@ -160,16 +162,16 @@ class EulerianSimulator(FluidSimulator):
     def init_dam_break_density(self):
         dx = self.dx
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            self.density[i, j, k] = 0.0
+            self.density_new[i, j, k] = 0.0
             self.grid_u[i, j, k] = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
             self.grid_v[i, j, k] = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz + 1):
             self.grid_w[i, j, k] = 0.0
-        # Dam break: fill left-front corner with density
+        # Dam break: fill left-front corner with density (cuboid, not sphere)
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            if i < self.nx // 2 and j < self.ny * 3 // 4 and k < self.nz // 2:
-                self.density[i, j, k] = 1.0
+            if i < self.nx // 2 and j < self.ny // 2 and k < self.nz // 2:
+                self.density_new[i, j, k] = 1.0
 
     # ---- Density-based particle updates (for GGUI rendering) ----
 
@@ -181,7 +183,7 @@ class EulerianSimulator(FluidSimulator):
         dx = self.dx
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             idx = i + j * self.nx + k * self.nx * self.ny
-            d = self.density[i, j, k]
+            d = self.density_new[i, j, k]
             if d > 0.01:
                 self.pos[idx] = [
                     (i + 0.5) * dx,

@@ -9,7 +9,7 @@ def run(debug=False):
     ti.init(arch=ti.vulkan)
 
     nx, ny, nz = 24, 48, 24
-    scene = "Dam Break"
+    scene = "Double Dam"
     num_particles = scene_particle_count(scene, nx)
 
     sim = FLIPSimulator(nx, ny, nz, num_particles)

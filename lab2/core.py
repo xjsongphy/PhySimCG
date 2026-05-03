@@ -106,6 +106,9 @@ class FluidSimulator:
         self._init_fluid_cells = ti.field(dtype=int, shape=(1,))
         self._fluid_vol_ratio = ti.field(dtype=float, shape=(1,))
 
+        # Color mode flags
+        self._color_density_updated = False
+
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
         self.obstacle_count = ti.field(dtype=int, shape=())

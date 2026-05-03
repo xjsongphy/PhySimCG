@@ -414,7 +414,11 @@ def run_gui(
         if current_color_mode == "Speed":
             sim.update_default_colors()
         elif current_color_mode == "Density":
-            sim.update_colors_by_density()
+            # Only update density colors once after initialization
+            # (real-time density changes too fast for stable visualization)
+            if not sim._color_density_updated:
+                sim.update_colors_by_density()
+                sim._color_density_updated = True
         else:
             sim.update_colors_uniform()
         if debug_mode:
