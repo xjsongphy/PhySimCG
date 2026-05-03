@@ -9,11 +9,11 @@ def run(debug=False):
     ti.init(arch=ti.vulkan)
 
     nx, ny, nz = 24, 48, 24
-    scene = "Double Dam"
+    scene = "Dam Break with Obstacle"
     num_particles = scene_particle_count(scene, nx)
 
     sim = FLIPSimulator(nx, ny, nz, num_particles)
-    sim.init_double_dam()
+    sim.init_dam_break_with_obstacle()
     sim.relabel_and_density()
     sim.init_colors()
     sim.store_initial_density()

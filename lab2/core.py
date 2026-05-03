@@ -38,6 +38,18 @@ def scene_particle_count(scene_name: str, nx: int) -> int:
         npz2 = int((0.95 - 0.55) / dx)
         return npx1 * npy1 * npz1 + npx2 * npy2 * npz2
 
+    elif scene_name == "Dam Break with Obstacle":
+        lo_x, hi_x = 0.05, 0.45
+        lo_y, hi_y = 0.05, 0.85
+        lo_z, hi_z = 0.05, 0.45
+        box_x = hi_x - lo_x
+        box_y = hi_y - lo_y
+        box_z = hi_z - lo_z
+        npx = int(box_x / dx)
+        npy = int(box_y / dx)
+        npz = int(box_z / dx)
+        return npx * npy * npz
+
     return 0
 
 
@@ -149,6 +161,74 @@ class FluidSimulator:
             self.vel[i] = [0.0, 0.0, 0.0]
 
         # Mark any extra particles (if num_particles > max_particles) as inactive
+        for i in range(max_particles, self.num_particles):
+            self.pos[i] = [-100.0, -100.0, -100.0]
+            self.vel[i] = [0.0, 0.0, 0.0]
+
+    @ti.kernel
+    def init_dam_break_with_obstacle(self):
+        """Dam break with a cylindrical obstacle in the middle."""
+        dx = self.dx
+        lo_x, hi_x = 0.05, 0.45
+        lo_y, hi_y = 0.05, 0.85
+        lo_z, hi_z = 0.05, 0.45
+        box_x = hi_x - lo_x
+        box_y = hi_y - lo_y
+        box_z = hi_z - lo_z
+
+        # Cylinder obstacle configuration
+        obs_radius = 0.08  # Radius of the cylindrical obstacle
+        obs_height = 0.6   # Height of the cylinder (extends vertically)
+        obs_center_y = 0.4 # Center of cylinder in Y
+
+        # Calculate maximum number of particles that can fit
+        npx = int(box_x / dx)
+        npy = int(box_y / dx)
+        npz = int(box_z / dx)
+        max_particles = npx * npy * npz
+
+        # Set obstacle (1 cylinder at center)
+        self.obstacle_count[None] = 1
+        # Cylinder obstacle: position, velocity (0), radius
+        # Note: store as sphere for simplicity in current implementation
+        self.obstacle_pos[0] = [0.25, obs_center_y, 0.25]
+        self.obstacle_vel[0] = [0.0, 0.0, 0.0]
+        self.obstacle_radius[0] = obs_radius
+
+        # Use exactly max_particles (don't exceed)
+        for i in range(max_particles):
+            ix = i % npx
+            iy = (i // npx) % npy
+            iz = i // (npx * npy)
+            x = lo_x + (ix + 0.5) * dx
+            y = lo_y + (iy + 0.5) * dx
+            z = lo_z + (iz + 0.5) * dx
+
+            # Check if particle is inside the cylinder obstacle
+            dist_xy = (x - 0.25) ** 2 + (z - 0.25) ** 2
+            in_cylinder = dist_xy < obs_radius ** 2 and abs(y - obs_center_y) < obs_height / 2
+
+            if not in_cylinder:
+                self.pos[i] = [x, y, z]
+            else:
+                # Push particles outside the obstacle
+                if dist_xy < obs_radius ** 2:
+                    # Push outward in XY plane
+                    angle = ti.atan2(z - 0.25, x - 0.25)
+                    x = 0.25 + (obs_radius + 0.01) * ti.cos(angle)
+                    z = 0.25 + (obs_radius + 0.01) * ti.sin(angle)
+                if abs(y - obs_center_y) < obs_height / 2:
+                    # Push up or down
+                    if y > obs_center_y:
+                        y = obs_center_y + obs_height / 2 + 0.01
+                    else:
+                        y = obs_center_y - obs_height / 2 - 0.01
+
+                self.pos[i] = [x, y, z]
+
+            self.vel[i] = [0.0, 0.0, 0.0]
+
+        # Mark any extra particles as inactive
         for i in range(max_particles, self.num_particles):
             self.pos[i] = [-100.0, -100.0, -100.0]
             self.vel[i] = [0.0, 0.0, 0.0]
