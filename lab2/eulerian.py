@@ -12,7 +12,8 @@ class EulerianSimulator(FluidSimulator):
     """
 
     def __init__(self, nx: int, ny: int, nz: int):
-        super().__init__(nx, ny, nz, num_particles=nx * ny * nz)
+        num_particles = nx * ny * nz
+        super().__init__(nx, ny, nz, num_particles=num_particles)
 
         # Density field (for visualization)
         self.density = ti.field(dtype=float, shape=(nx, ny, nz))

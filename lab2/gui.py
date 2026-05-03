@@ -142,6 +142,7 @@ def run_gui(
     sim_method = "FLIP"  # "FLIP" or "APIC"
     animate_obstacle = False
     sim_time = 0.0
+    slow_motion = 1.0  # 1.0 = normal speed, 0.5 = half speed, 0.25 = quarter speed
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -199,6 +200,15 @@ def run_gui(
             current_dt = g.slider_float("dt", current_dt, 0.001, 0.03)
             current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
             current_gravity = g.slider_float("gravity", current_gravity, -20.0, 0.0)
+            g.text(f"  Speed: {slow_motion}x")
+            if g.button("0.25x"):
+                slow_motion = 0.25
+            if g.button("0.5x"):
+                slow_motion = 0.5
+            if g.button("1.0x"):
+                slow_motion = 1.0
+            if g.button("2.0x"):
+                slow_motion = 2.0
             if g.button("Pause / Resume"):
                 paused = not paused
             g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
@@ -398,13 +408,15 @@ def run_gui(
         if not paused:
             if sim.obstacle_count[None] > 0:
                 sim.mark_obstacle_cells()
+            # Apply slow motion factor
+            dt_sim = current_dt * slow_motion
             for _ in range(num_substeps):
                 substep_fn(
-                    dt=current_dt,
+                    dt=dt_sim,
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
                 )
-            sim_time += current_dt * num_substeps
+            sim_time += dt_sim * num_substeps
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 

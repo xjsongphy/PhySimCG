@@ -177,9 +177,9 @@ class FluidSimulator:
         box_z = hi_z - lo_z
 
         # Cylinder obstacle configuration
-        obs_radius = 0.08  # Radius of the cylindrical obstacle
-        obs_height = 0.6   # Height of the cylinder (extends vertically)
-        obs_center_y = 0.4 # Center of cylinder in Y
+        obs_radius = 0.04  # Radius of the cylindrical obstacle (reduced)
+        obs_height = 0.4   # Height of the cylinder (reduced from 0.6)
+        obs_center_y = 0.5 # Center of cylinder in Y (moved up)
 
         # Calculate maximum number of particles that can fit
         npx = int(box_x / dx)
@@ -190,7 +190,6 @@ class FluidSimulator:
         # Set obstacle (1 cylinder at center)
         self.obstacle_count[None] = 1
         # Cylinder obstacle: position, velocity (0), radius
-        # Note: store as sphere for simplicity in current implementation
         self.obstacle_pos[0] = [0.25, obs_center_y, 0.25]
         self.obstacle_vel[0] = [0.0, 0.0, 0.0]
         self.obstacle_radius[0] = obs_radius
