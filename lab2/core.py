@@ -81,6 +81,14 @@ class FluidSimulator:
         self.grid_particle_count = ti.field(dtype=int, shape=(nx, ny, nz))
         self.grid_particle_ids = ti.field(dtype=int, shape=(nx, ny, nz, self._max_per_cell))
 
+        # CG pressure solver fields
+        self.pressure = ti.field(dtype=float, shape=(nx, ny, nz))
+        self._cg_r = ti.field(dtype=float, shape=(nx, ny, nz))
+        self._cg_p = ti.field(dtype=float, shape=(nx, ny, nz))
+        self._cg_Ap = ti.field(dtype=float, shape=(nx, ny, nz))
+        self._cg_rdotr = ti.field(dtype=float, shape=())
+        self._cg_pAp = ti.field(dtype=float, shape=())
+
         # Obstacles (up to 4 spheres)
         self._max_obstacles = 4
         self.obstacle_count = ti.field(dtype=int, shape=())
@@ -447,6 +455,149 @@ class FluidSimulator:
                 self.grid_w[i, j, k] += correction
             if k < self.nz - 1 and self.cell_type[i, j, k + 1] != 2:
                 self.grid_w[i, j, k + 1] -= correction
+
+    # ---- CG Pressure Projection ----
+
+    def solve_incompressibility_cg(
+        self,
+        num_iters: int,
+        dt: float,
+        compensate_drift: bool,
+    ):
+        """Conjugate Gradient pressure solve. Modifies grid velocities directly."""
+        self.pressure.fill(0)
+        self._cg_init_residual(compensate_drift)
+        self._cg_p.copy_from(self._cg_r)
+        self._cg_rdotr[None] = 0.0
+        self._cg_compute_rdotr()
+        rr = self._cg_rdotr[None]
+        if rr < 1e-14:
+            return
+        for _ in range(num_iters):
+            self._cg_Ap.fill(0)
+            self._cg_compute_Ap()
+            self._cg_pAp[None] = 0.0
+            self._cg_compute_pAp()
+            pAp = self._cg_pAp[None]
+            if abs(pAp) < 1e-14:
+                break
+            alpha = rr / pAp
+            self._cg_update(alpha)
+            old_rr = rr
+            self._cg_rdotr[None] = 0.0
+            self._cg_compute_rdotr()
+            rr = self._cg_rdotr[None]
+            if rr < 1e-14:
+                break
+            beta = rr / old_rr
+            self._cg_update_p(beta)
+
+        # Apply pressure gradient to velocity
+        self._cg_apply_pressure_gradient()
+
+    @ti.kernel
+    def _cg_init_residual(self, compensate_drift: bool):
+        """Initialize residual r = b - Ax, with x=0 so r = b (divergence)."""
+        self._cg_rdotr[None] = 0.0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            if self.cell_type[i, j, k] != 0:
+                self._cg_r[i, j, k] = 0.0
+                continue
+            div = (
+                self.grid_u[i + 1, j, k]
+                - self.grid_u[i, j, k]
+                + self.grid_v[i, j + 1, k]
+                - self.grid_v[i, j, k]
+                + self.grid_w[i, j, k + 1]
+                - self.grid_w[i, j, k]
+            )
+            if compensate_drift:
+                density_diff = (
+                    self.particle_density[i, j, k]
+                    - self.particle_density_init[i, j, k]
+                )
+                div -= density_diff * 0.1
+            self._cg_r[i, j, k] = div
+
+    @ti.kernel
+    def _cg_compute_rdotr(self):
+        s = 0.0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            s += self._cg_r[i, j, k] * self._cg_r[i, j, k]
+        self._cg_rdotr[None] = s
+
+    @ti.kernel
+    def _cg_compute_Ap(self):
+        """Compute Ap = L * p where L is the discrete Laplacian."""
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            if self.cell_type[i, j, k] != 0:
+                continue
+            s = 0.0
+            if i > 0 and self.cell_type[i - 1, j, k] != 2:
+                s -= self._cg_p[i - 1, j, k]
+            else:
+                s -= 0.0
+            if i < self.nx - 1 and self.cell_type[i + 1, j, k] != 2:
+                s -= self._cg_p[i + 1, j, k]
+            if j > 0 and self.cell_type[i, j - 1, k] != 2:
+                s -= self._cg_p[i, j - 1, k]
+            if j < self.ny - 1 and self.cell_type[i, j + 1, k] != 2:
+                s -= self._cg_p[i, j + 1, k]
+            if k > 0 and self.cell_type[i, j, k - 1] != 2:
+                s -= self._cg_p[i, j, k - 1]
+            if k < self.nz - 1 and self.cell_type[i, j, k + 1] != 2:
+                s -= self._cg_p[i, j, k + 1]
+            n_neighbors = 0.0
+            if i > 0 and self.cell_type[i - 1, j, k] != 2:
+                n_neighbors += 1.0
+            if i < self.nx - 1 and self.cell_type[i + 1, j, k] != 2:
+                n_neighbors += 1.0
+            if j > 0 and self.cell_type[i, j - 1, k] != 2:
+                n_neighbors += 1.0
+            if j < self.ny - 1 and self.cell_type[i, j + 1, k] != 2:
+                n_neighbors += 1.0
+            if k > 0 and self.cell_type[i, j, k - 1] != 2:
+                n_neighbors += 1.0
+            if k < self.nz - 1 and self.cell_type[i, j, k + 1] != 2:
+                n_neighbors += 1.0
+            self._cg_Ap[i, j, k] = n_neighbors * self._cg_p[i, j, k] + s
+
+    @ti.kernel
+    def _cg_compute_pAp(self):
+        s = 0.0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            s += self._cg_p[i, j, k] * self._cg_Ap[i, j, k]
+        self._cg_pAp[None] = s
+
+    @ti.kernel
+    def _cg_update(self, alpha: float):
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            self.pressure[i, j, k] += alpha * self._cg_p[i, j, k]
+            self._cg_r[i, j, k] -= alpha * self._cg_Ap[i, j, k]
+
+    @ti.kernel
+    def _cg_update_p(self, beta: float):
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            self._cg_p[i, j, k] = self._cg_r[i, j, k] + beta * self._cg_p[i, j, k]
+
+    @ti.kernel
+    def _cg_apply_pressure_gradient(self):
+        """Apply pressure gradient to staggered grid velocities."""
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            if self.cell_type[i, j, k] != 0:
+                continue
+            if i > 0 and self.cell_type[i - 1, j, k] != 2:
+                self.grid_u[i, j, k] += self.pressure[i, j, k] - self.pressure[i - 1, j, k]
+            if i < self.nx - 1 and self.cell_type[i + 1, j, k] != 2:
+                self.grid_u[i + 1, j, k] -= self.pressure[i + 1, j, k] - self.pressure[i, j, k]
+            if j > 0 and self.cell_type[i, j - 1, k] != 2:
+                self.grid_v[i, j, k] += self.pressure[i, j, k] - self.pressure[i, j - 1, k]
+            if j < self.ny - 1 and self.cell_type[i, j + 1, k] != 2:
+                self.grid_v[i, j + 1, k] -= self.pressure[i, j + 1, k] - self.pressure[i, j, k]
+            if k > 0 and self.cell_type[i, j, k - 1] != 2:
+                self.grid_w[i, j, k] += self.pressure[i, j, k] - self.pressure[i, j, k - 1]
+            if k < self.nz - 1 and self.cell_type[i, j, k + 1] != 2:
+                self.grid_w[i, j, k + 1] -= self.pressure[i, j, k + 1] - self.pressure[i, j, k]
 
     # ---- Grid Utilities ----
 

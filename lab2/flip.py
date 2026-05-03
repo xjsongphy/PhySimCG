@@ -24,6 +24,7 @@ class FLIPSimulator(FluidSimulator):
         compensate_drift: bool = True,
         separate_particles: bool = True,
         reflection: bool = False,
+        use_cg: bool = False,
     ):
         if reflection:
             self._substep_reflection(dt, flip_ratio, gravity,
@@ -42,9 +43,14 @@ class FLIPSimulator(FluidSimulator):
         self.save_grid_vel_old()
 
         self.relabel_and_density()
-        self.solve_incompressibility(
-            num_pressure_iters, dt, over_relaxation, compensate_drift
-        )
+        if use_cg:
+            self.solve_incompressibility_cg(
+                num_pressure_iters, dt, compensate_drift
+            )
+        else:
+            self.solve_incompressibility(
+                num_pressure_iters, dt, over_relaxation, compensate_drift
+            )
         self.set_boundary_velocity()
 
         self.transfer_g2p(flip_ratio)

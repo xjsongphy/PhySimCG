@@ -127,9 +127,10 @@ def run_gui(
     current_flip_ratio = flip_ratio
     current_gravity = gravity
     current_scene = SCENES[0]
-    # B1: current_color_mode = none
+    current_color_mode = "Speed"
     current_res_name = "Med (24)"
     obstacle_name = "None"
+    use_cg = False
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -181,16 +182,19 @@ def run_gui(
                     _recreate = (current_scene, nx, ny, nz)
 
         # --- GUI: Controls ---
-        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.28) as g:
+        with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.32) as g:
             g.text("=== Simulation ===")
             current_dt = g.slider_float("dt", current_dt, 0.001, 0.03)
             current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
             current_gravity = g.slider_float("gravity", current_gravity, -20.0, 0.0)
             if g.button("Pause / Resume"):
                 paused = not paused
+            g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
+            if g.button("Toggle CG/GS"):
+                use_cg = not use_cg
 
         # --- GUI: Obstacle ---
-        with gui.sub_window("Obstacle", 0.02, 0.62, 0.22, 0.22) as g:
+        with gui.sub_window("Obstacle", 0.02, 0.62, 0.22, 0.25) as g:
             g.text("=== Obstacle ===")
             g.text(f"  Current: {obstacle_name}")
             for name in OBSTACLES:
@@ -201,6 +205,16 @@ def run_gui(
                     for o, (r_i, pos_i) in enumerate(obs_list):
                         sim.obstacle_radius[o] = r_i
                         sim.obstacle_pos[o] = pos_i
+            if sim.obstacle_count[None] > 0:
+                g.text("  MMB: drag 1st obs")
+
+        # --- GUI: Color ---
+        with gui.sub_window("Color", 0.40, 0.02, 0.12, 0.22) as g:
+            g.text("=== Color ===")
+            g.text(f"  Mode: {current_color_mode}")
+            for mode in ["Speed", "Density", "Uniform"]:
+                if g.button(mode):
+                    current_color_mode = mode
 
         # --- GUI: Debug toggle ---
         with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.08) as g:
@@ -226,7 +240,7 @@ def run_gui(
         rmb = window.is_pressed(ti.ui.RMB)
 
         # Skip camera controls when cursor is over GUI panels
-        over_gui = (cx < 0.42 and cy < 0.88)
+        over_gui = (cx < 0.54 and cy < 0.88)
 
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
@@ -247,18 +261,61 @@ def run_gui(
         ray_dir = pt_on_plane - cam_pos
         ray_dir = ray_dir / (np.linalg.norm(ray_dir) + 1e-8)
 
-        # Camera orbit (LMB rotate, RMB pan)
+        # Ray-sphere intersection for obstacle picking
+        obs_count = sim.obstacle_count[None]
+        picked_obs = -1
+        if obs_count > 0:
+            best_t = 1e30
+            for o in range(min(obs_count, 4)):
+                obs_r = sim.obstacle_radius[o]
+                if obs_r <= 0:
+                    continue
+                oc = cam_pos - np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                a = ray_dir.dot(ray_dir)
+                b = 2.0 * oc.dot(ray_dir)
+                c = oc.dot(oc) - obs_r * obs_r
+                disc = b * b - 4 * a * c
+                if disc >= 0:
+                    t = (-b - np.sqrt(disc)) / (2 * a)
+                    if 0 < t < best_t:
+                        best_t = t
+                        picked_obs = o
+
+        # LMB: drag obstacle (if picked) or pan camera
+        dragging_obs = False
+        if lmb and not over_gui and picked_obs >= 0:
+            dragging_obs = True
+            # Drag obstacle along the plane perpendicular to ray at hit point
+            plane_y = sim.obstacle_pos[picked_obs][1]
+            if abs(ray_dir[1]) > 1e-8:
+                t_hit = (plane_y - cam_pos[1]) / ray_dir[1]
+                if t_hit > 0:
+                    hit = cam_pos + t_hit * ray_dir
+                    hit[0] = np.clip(hit[0], 0.05, 0.95)
+                    hit[2] = np.clip(hit[2], 0.05, 0.95)
+                    hit[1] = plane_y
+                    old_pos = np.array([
+                        sim.obstacle_pos[picked_obs][0],
+                        sim.obstacle_pos[picked_obs][1],
+                        sim.obstacle_pos[picked_obs][2],
+                    ])
+                    vel_est = (hit - old_pos) / max(current_dt, 1e-6)
+                    sim.obstacle_pos[picked_obs] = hit
+                    sim.obstacle_vel[picked_obs] = vel_est
+
+        # Camera controls
         if prev_cursor_valid:
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
 
-            if lmb and not over_gui:
+            # RMB: rotate camera direction (orbit)
+            if rmb and not over_gui:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
                 cam_pitch = np.clip(cam_pitch, 0.05, 1.5)
 
-            # RMB: Pan
-            if rmb and not over_gui:
+            # LMB (no obstacle hit): pan camera position
+            if lmb and not over_gui and not dragging_obs:
                 pan_speed = cam_dist * 0.8
                 pan_x = dx_mouse * pan_speed
                 pan_y = -dy_mouse * pan_speed
@@ -296,6 +353,7 @@ def run_gui(
                     dt=current_dt,
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
+                    use_cg=use_cg,
                 )
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
@@ -303,7 +361,12 @@ def run_gui(
         # ==== Colors ====
         if debug_mode:
             t_col = time.perf_counter()
-        sim.update_default_colors()
+        if current_color_mode == "Speed":
+            sim.update_default_colors()
+        elif current_color_mode == "Density":
+            sim.update_colors_by_density()
+        else:
+            sim.update_colors_uniform()
         if debug_mode:
             _profiler.record("color", (time.perf_counter() - t_col) * 1000)
 
@@ -320,7 +383,7 @@ def run_gui(
         # Fluid
         scene.particles(
             sim.pos,
-            radius=dx * 0.35,
+            radius=dx * 0.25,
             per_vertex_color=sim.color,
         )
 
