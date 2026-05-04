@@ -468,20 +468,74 @@ class FluidSimulator:
                         self.vel[i][d] = 0.0
             # Obstacle collisions
             for o in ti.static(range(self._max_obstacles)):
-                if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
-                    obs_pos = self.obstacle_pos[o]
-                    obs_r = self.obstacle_radius[o] + 0.01
-                    diff = self.pos[i] - obs_pos
-                    dist = diff.norm()
-                    if dist < obs_r and dist > 1e-8:
-                        n = diff / dist
-                        self.pos[i] = obs_pos + n * obs_r
-                        obs_vel = self.obstacle_vel[o]
-                        rel_vel = self.vel[i] - obs_vel
-                        vn = rel_vel.dot(n)
-                        if vn < 0:
-                            self.vel[i] -= n * vn * 1.5
-                            self.vel[i] += obs_vel
+                if o < self.obstacle_count[None]:
+                    if self.obstacle_type[o] == 0:  # sphere
+                        obs_r = self.obstacle_radius[o]
+                        if obs_r <= 0:
+                            continue
+                        obs_pos = self.obstacle_pos[o]
+                        obs_r_col = obs_r + 0.01
+                        diff = self.pos[i] - obs_pos
+                        dist = diff.norm()
+                        if dist < obs_r_col and dist > 1e-8:
+                            n = diff / dist
+                            self.pos[i] = obs_pos + n * obs_r_col
+                            obs_vel = self.obstacle_vel[o]
+                            rel_vel = self.vel[i] - obs_vel
+                            vn = rel_vel.dot(n)
+                            if vn < 0:
+                                self.vel[i] -= n * vn * 1.5
+                                self.vel[i] += obs_vel
+                    else:  # box
+                        sz = self.obstacle_size[o]
+                        obs_pos = self.obstacle_pos[o]
+                        qw = self.obstacle_rotation[o][0]
+                        qx = self.obstacle_rotation[o][1]
+                        qy = self.obstacle_rotation[o][2]
+                        qz = self.obstacle_rotation[o][3]
+                        cqw, cqx, cqy, cqz = qw, -qx, -qy, -qz
+                        lx = self.pos[i][0] - obs_pos[0]
+                        ly = self.pos[i][1] - obs_pos[1]
+                        lz = self.pos[i][2] - obs_pos[2]
+                        tw = -cqx*lx - cqy*ly - cqz*lz
+                        tx = cqw*lx + cqy*lz - cqz*ly
+                        ty = cqw*ly - cqx*lz + cqz*lx
+                        tz = cqw*lz + cqx*ly - cqy*lx
+                        rx = tw*qx + tx*qw + ty*qz - tz*qy
+                        ry = tw*qy - tx*qz + ty*qw + tz*qx
+                        rz = tw*qz + tx*qy - ty*qx + tz*qw
+                        half_x, half_y, half_z = sz[0] + 0.01, sz[1] + 0.01, sz[2] + 0.01
+                        push_x = ti.max(0.0, ti.abs(rx) - half_x)
+                        push_y = ti.max(0.0, ti.abs(ry) - half_y)
+                        push_z = ti.max(0.0, ti.abs(rz) - half_z)
+                        if push_x > 0 or push_y > 0 or push_z > 0:
+                            sign_x = -1.0 if rx < 0 else 1.0
+                            sign_y = -1.0 if ry < 0 else 1.0
+                            sign_z = -1.0 if rz < 0 else 1.0
+                            lpx, lpy, lpz = sign_x * push_x, sign_y * push_y, sign_z * push_z
+                            ptw = -qx*lpx - qy*lpy - qz*lpz
+                            ptx = qw*lpx + qy*lpz - qz*lpy
+                            pty = qw*lpy - qx*lpz + qz*lpx
+                            ptz = qw*lpz + qx*lpy - qy*lpx
+                            wpx = ptw*cqx + ptx*cqw + pty*cqz - ptz*cqy
+                            wpy = ptw*cqy - ptx*cqz + pty*cqw + ptz*cqx
+                            wpz = ptw*cqz + ptx*cqy - pty*cqx + ptz*cqw
+                            self.pos[i][0] += wpx
+                            self.pos[i][1] += wpy
+                            self.pos[i][2] += wpz
+                            obs_vel = self.obstacle_vel[o]
+                            rel_vel = self.vel[i] - obs_vel
+                            vn = rel_vel[0]*wpx + rel_vel[1]*wpy + rel_vel[2]*wpz
+                            push_norm = ti.sqrt(wpx*wpx + wpy*wpy + wpz*wpz)
+                            if push_norm > 1e-8:
+                                if vn < 0:
+                                    nx = wpx / push_norm
+                                    ny = wpy / push_norm
+                                    nz = wpz / push_norm
+                                    self.vel[i][0] -= nx * vn * 1.5
+                                    self.vel[i][1] -= ny * vn * 1.5
+                                    self.vel[i][2] -= nz * vn * 1.5
+                                    self.vel[i] += obs_vel
 
     def handle_particle_collisions(self):
         """Compatibility: use integrate_and_collide with zero dt."""
