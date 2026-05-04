@@ -43,6 +43,60 @@ OBSTACLES = {
     "Sphere + Box":  [("sphere", 0.05, None, (0.35, 0.25, 0.35)),
                       ("box", None, (0.06, 0.08, 0.06), (0.65, 0.25, 0.65))],
 }
+
+def _quat_mul(q1, q2):
+    """Quaternion multiplication: q1 * q2.  Each is np.array([w, x, y, z])."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ], dtype=np.float32)
+
+def _quat_normalize(q):
+    """Normalize a quaternion."""
+    n = np.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
+    if n > 1e-12:
+        q = q / n
+    return q
+
+def _quat_angle_axis(angle, axis):
+    """Quaternion from angle (rad) and axis (3D vector)."""
+    half = angle * 0.5
+    s = np.sin(half)
+    return np.array([np.cos(half), axis[0]*s, axis[1]*s, axis[2]*s], dtype=np.float32)
+
+def _quat_to_matrix(q):
+    """Convert quaternion [w,x,y,z] to 3x3 rotation matrix."""
+    w, x, y, z = q
+    return np.array([
+        [1-2*y*y-2*z*z, 2*x*y-2*w*z, 2*x*z+2*w*y],
+        [2*x*y+2*w*z, 1-2*x*x-2*z*z, 2*y*z-2*w*x],
+        [2*x*z-2*w*y, 2*y*z+2*w*x, 1-2*x*x-2*y*y],
+    ], dtype=np.float32)
+
+def _build_box_geometry():
+    """Return (vertices_field, indices_field) for unit cube [-0.5,0.5]^3."""
+    verts = np.array([
+        [-0.5, -0.5, -0.5], [ 0.5, -0.5, -0.5], [ 0.5,  0.5, -0.5], [-0.5,  0.5, -0.5],
+        [-0.5, -0.5,  0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
+    ], dtype=np.float32)
+    indices = np.array([
+        0,1,2, 0,2,3,  # -Z
+        4,6,5, 4,7,6,  # +Z
+        0,3,7, 0,7,4,  # -X
+        1,5,6, 1,6,2,  # +X
+        0,4,5, 0,5,1,  # -Y
+        3,2,6, 3,6,7,  # +Y
+    ], dtype=np.int32)
+    vf = ti.Vector.field(3, dtype=float, shape=len(verts))
+    vf.from_numpy(verts)
+    inf = ti.field(dtype=int, shape=len(indices))
+    inf.from_numpy(indices)
+    return vf, inf
+
 class _Profiler:
     """Lightweight frame profiler. Only active when debug_mode is True."""
     def __init__(self):
