@@ -1,3 +1,33 @@
+commit 262ca5ad19079b4ad5d25f686ee169485c02cf0e
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:16:58 2026 +0800
+
+    assets: compress GIFs — 110MB → 34MB (72% reduction)
+    
+    Halved resolution and frame rate, quantized to 128 colors
+    using PIL Lanczos + optimize.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/demos/gif/APIC.gif                            | Bin 16327914 -> 4679767 bytes
+ lab2/demos/gif/CG.gif                              | Bin 24231790 -> 6606292 bytes
+ lab2/demos/gif/Manually_Moving_Obstacle.gif        | Bin 5307666 -> 1368051 bytes
+ lab2/demos/gif/Moving_Obstacle.gif                 | Bin 22681012 -> 6142216 bytes
+ lab2/demos/gif/Shake.gif                           | Bin 27319321 -> 7223492 bytes
+ lab2/demos/gif/Surface_Reconstruction.gif          | Bin 2709843 -> 801786 bytes
+ .../demos/gif/basic+density_colored+Double_Dam.gif | Bin 12654058 -> 3582112 bytes
+ lab2/demos/gif/basic+speed_cloered+Dam_Break.gif   | Bin 17552531 -> 4804073 bytes
+ 8 files changed, 0 insertions(+), 0 deletions(-)
+
+commit a8804f91d3631b79103f0a741b691534ad73dbaa
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:14:00 2026 +0800
+
+    docs: update git log to lab2_log.txt
+
+ lab2_log.txt | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
 commit 12bc3b54537eff353a6bbb5641a174c76b724210
 Author: xjsongphy <m18892286119@163.com>
 Date:   Mon May 4 23:13:08 2026 +0800
