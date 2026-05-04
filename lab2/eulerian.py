@@ -116,7 +116,7 @@ class EulerianSimulator(FluidSimulator):
             cy = (j + 0.5) * dx
             cz = (k + 0.5) * dx
             vel = self._interp_vel_self(cx, cy, cz, dx)
-            dst[i, j, k] = self._interp_field(src, cx - dt * vel[0], cy - dt * vel[1], cz - dt * vel[2], dx)
+            dst[i, j, k] = self._interp_field(src, cx - dt * vel[0], cy - dt * vel[1], cz - dt * vel[2])
 
     @ti.kernel
     def _advect_density_forward(self, src: ti.template(), dst: ti.template(), dt: float):
@@ -127,7 +127,7 @@ class EulerianSimulator(FluidSimulator):
             cy = (j + 0.5) * dx
             cz = (k + 0.5) * dx
             vel = self._interp_vel_self(cx, cy, cz, dx)
-            dst[i, j, k] = self._interp_field(src, cx + dt * vel[0], cy + dt * vel[1], cz + dt * vel[2], dx)
+            dst[i, j, k] = self._interp_field(src, cx + dt * vel[0], cy + dt * vel[1], cz + dt * vel[2])
 
     @ti.kernel
     def _reflect_density(self, d_orig: ti.template(), d_back: ti.template(),
@@ -169,7 +169,7 @@ class EulerianSimulator(FluidSimulator):
         return self._interp_field(self.density, px / dx - 0.5, py / dx - 0.5, pz / dx - 0.5)
 
     @ti.func
-    def _interp_field(self, field, gx, gy, gz, dx) -> float:
+    def _interp_field(self, field, gx, gy, gz) -> float:
         """Interpolate a cell-centered field at fractional grid coordinates."""
         i0 = ti.floor(gx, int)
         j0 = ti.floor(gy, int)
