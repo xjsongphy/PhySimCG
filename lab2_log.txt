@@ -1,3 +1,47 @@
+commit 12bc3b54537eff353a6bbb5641a174c76b724210
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:13:08 2026 +0800
+
+    docs: fix density compensation coefficient in report
+    
+    Correct parameter inconsistency:
+    - Report had 0.2 for density expansion, code uses 0.5
+    - Report described "asymmetric bidirectional" compensation,
+      but code only applies unidirectional expansion correction
+      (only for density_diff > 0, no compression for low density)
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ report.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+commit 7470d163fa4f912fc9eef8584135199779a85bfa
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:10:22 2026 +0800
+
+    Update report
+
+ report.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+commit 2981c86470ba017da984485142fb11983b43ed63
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:08:06 2026 +0800
+
+    Add repo link
+
+ report.md | 2 ++
+ 1 file changed, 2 insertions(+)
+
+commit 04131d9959c44250535f4402ab50d108aecfa981
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:06:40 2026 +0800
+
+    docs: add git log to lab2_log.txt
+
+ lab2_log.txt | 890 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 890 insertions(+)
+
 commit de147c24be1a0cce353a783172e86236ec9ad2ce
 Author: xjsongphy <m18892286119@163.com>
 Date:   Mon May 4 23:06:36 2026 +0800
