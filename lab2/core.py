@@ -351,22 +351,21 @@ class FluidSimulator:
                 obs_pos = self.obstacle_pos[o]
                 if self.obstacle_type[o] == 0:  # sphere
                     obs_r = self.obstacle_radius[o]
-                    if obs_r <= 0:
-                        continue
-                    r2 = (obs_r + dx) ** 2
-                    i0 = ti.max(0, int((obs_pos[0] - obs_r - dx) / dx))
-                    i1 = ti.min(self.nx - 1, int((obs_pos[0] + obs_r + dx) / dx) + 1)
-                    j0 = ti.max(0, int((obs_pos[1] - obs_r - dx) / dx))
-                    j1 = ti.min(self.ny - 1, int((obs_pos[1] + obs_r + dx) / dx) + 1)
-                    k0 = ti.max(0, int((obs_pos[2] - obs_r - dx) / dx))
-                    k1 = ti.min(self.nz - 1, int((obs_pos[2] + obs_r + dx) / dx) + 1)
-                    for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
-                        cx = (i + 0.5) * dx
-                        cy = (j + 0.5) * dx
-                        cz = (k + 0.5) * dx
-                        dist2 = (cx - obs_pos[0])**2 + (cy - obs_pos[1])**2 + (cz - obs_pos[2])**2
-                        if dist2 < r2:
-                            self.cell_type[i, j, k] = 2
+                    if obs_r > 0:
+                        r2 = (obs_r + dx) ** 2
+                        i0 = ti.max(0, int((obs_pos[0] - obs_r - dx) / dx))
+                        i1 = ti.min(self.nx - 1, int((obs_pos[0] + obs_r + dx) / dx) + 1)
+                        j0 = ti.max(0, int((obs_pos[1] - obs_r - dx) / dx))
+                        j1 = ti.min(self.ny - 1, int((obs_pos[1] + obs_r + dx) / dx) + 1)
+                        k0 = ti.max(0, int((obs_pos[2] - obs_r - dx) / dx))
+                        k1 = ti.min(self.nz - 1, int((obs_pos[2] + obs_r + dx) / dx) + 1)
+                        for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
+                            cx = (i + 0.5) * dx
+                            cy = (j + 0.5) * dx
+                            cz = (k + 0.5) * dx
+                            dist2 = (cx - obs_pos[0])**2 + (cy - obs_pos[1])**2 + (cz - obs_pos[2])**2
+                            if dist2 < r2:
+                                self.cell_type[i, j, k] = 2
                 else:  # box
                     sz = self.obstacle_size[o]
                     half_x, half_y, half_z = sz[0] + dx, sz[1] + dx, sz[2] + dx
@@ -471,21 +470,19 @@ class FluidSimulator:
                 if o < self.obstacle_count[None]:
                     if self.obstacle_type[o] == 0:  # sphere
                         obs_r = self.obstacle_radius[o]
-                        if obs_r <= 0:
-                            continue
-                        obs_pos = self.obstacle_pos[o]
-                        obs_r_col = obs_r + 0.01
-                        diff = self.pos[i] - obs_pos
-                        dist = diff.norm()
-                        if dist < obs_r_col and dist > 1e-8:
-                            n = diff / dist
-                            self.pos[i] = obs_pos + n * obs_r_col
-                            obs_vel = self.obstacle_vel[o]
-                            rel_vel = self.vel[i] - obs_vel
-                            vn = rel_vel.dot(n)
-                            if vn < 0:
-                                self.vel[i] -= n * vn * 1.5
-                                self.vel[i] += obs_vel
+                        if obs_r > 0:
+                            obs_pos = self.obstacle_pos[o]
+                            obs_r_col = obs_r + 0.01
+                            diff = self.pos[i] - obs_pos
+                            dist = diff.norm()
+                            if dist < obs_r_col and dist > 1e-8:
+                                n = diff / dist
+                                self.pos[i] = obs_pos + n * obs_r_col
+                                obs_vel = self.obstacle_vel[o]
+                                rel_vel = self.vel[i] - obs_vel
+                                vn = rel_vel.dot(n)
+                                if vn < 0:
+                                    self.vel[i] -= n * vn * 1.5
                     else:  # box
                         sz = self.obstacle_size[o]
                         obs_pos = self.obstacle_pos[o]
@@ -535,7 +532,6 @@ class FluidSimulator:
                                     self.vel[i][0] -= nx * vn * 1.5
                                     self.vel[i][1] -= ny * vn * 1.5
                                     self.vel[i][2] -= nz * vn * 1.5
-                                    self.vel[i] += obs_vel
 
     def handle_particle_collisions(self):
         """Compatibility: use integrate_and_collide with zero dt."""
@@ -669,9 +665,7 @@ class FluidSimulator:
                     - self._target_density[None]
                 )
                 if density_diff > 0.0:
-                    div -= density_diff * 0.2
-                else:
-                    div -= density_diff * 0.08
+                    div -= density_diff * 0.5
 
             correction = over_relaxation * div / s
 
@@ -749,9 +743,7 @@ class FluidSimulator:
                     - self._target_density[None]
                 )
                 if density_diff > 0.0:
-                    div -= density_diff * 0.2
-                else:
-                    div -= density_diff * 0.08
+                    div -= density_diff * 0.5
             self._cg_r[i, j, k] = div
 
     @ti.kernel

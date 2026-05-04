@@ -106,7 +106,8 @@ class EulerianSimulator(FluidSimulator):
         """
         self._advect_density_backward(self.density, self.density_new, dt)
         self._advect_density_forward(self.density_new, self._d_tmp1, dt)
-        self._reflect_density(self.density, self.density_new, self._d_tmp1, self.density_new)
+        self._reflect_density(self.density, self.density_new, self._d_tmp1, self._d_tmp2)
+        self.density_new.copy_from(self._d_tmp2)
 
     @ti.kernel
     def _advect_density_backward(self, src: ti.template(), dst: ti.template(), dt: float):

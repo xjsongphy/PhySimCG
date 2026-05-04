@@ -1,16 +1,43 @@
 """B5: Surface Reconstruction demo — Marching Cubes from FLIP particles."""
+import os
+import re
+import shutil
+import tempfile
+import time
 import numpy as np
 import taichi as ti
+import imageio
 from lab2.core import scene_particle_count
 from lab2.flip import FLIPSimulator
-from lab2.surface import build_surface_mesh, _init_mc_tables
+from lab2.surface import build_surface_mesh
 
+
+def _save_gif_from_dir(tmp_dir, fps=20):
+    """Read PNG frames from temp dir, combine into GIF, then clean up."""
+    pngs = sorted(
+        [f for f in os.listdir(tmp_dir) if f.endswith(".png")],
+        key=lambda x: int(re.search(r'\d+', x).group())
+    )
+    if not pngs:
+        print("[record] No frames captured.")
+        return
+    frames = []
+    for p in pngs:
+        f = imageio.v3.imread(os.path.join(tmp_dir, p))
+        s = f[::2, ::2]
+        if s.shape[-1] == 4:
+            s = s[..., :3]
+        frames.append(s)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out = os.path.join(os.path.dirname(__file__), f"record_b5_{ts}.gif")
+    imageio.mimsave(out, frames, fps=fps, loop=0)
+    shutil.rmtree(tmp_dir)
+    print(f"[record] GIF saved: {out} ({len(frames)} frames, {frames[0].shape[1]}x{frames[0].shape[0]}px)")
 
 def run(debug=False):
     ti.init(arch=ti.gpu)
-    _init_mc_tables()
 
-    nx, ny, nz = 32, 48, 32
+    nx, ny, nz = 20, 30, 20
     scene = "Dam Break"
     num_particles = scene_particle_count(scene, nx)
 
@@ -39,6 +66,32 @@ def run(debug=False):
     dt = 0.01
     frame_count = 0
     paused = False
+    _recording = False
+    _record_dir = None
+    _record_count = 0
+
+    # V-t curve
+    sim.save_init_volume()
+    _vt_max_pts = 300
+    _vt_curve_np = np.zeros((0, 3), dtype=np.float32)
+    _vt_curve_field = ti.Vector.field(3, dtype=float, shape=(_vt_max_pts,))
+    _vt_frame_idx = 0
+
+    # Container box wireframe
+    def _make_box_edges(lo, hi, n=30):
+        pts = []
+        for t in np.linspace(0, 1, n):
+            for a in [lo, hi]:
+                pts.append([a, lo, lo + t * (hi - lo)])
+                pts.append([a, hi, lo + t * (hi - lo)])
+                pts.append([lo + t * (hi - lo), a, lo])
+                pts.append([lo + t * (hi - lo), a, hi])
+                pts.append([lo, lo + t * (hi - lo), a])
+                pts.append([hi, lo + t * (hi - lo), a])
+        return np.array(pts, dtype=np.float32)
+    box_pts = _make_box_edges(0.0, 1.0, n=30)
+    box_field = ti.Vector.field(3, dtype=float, shape=box_pts.shape[0])
+    box_field.from_numpy(box_pts)
 
     # Mesh fields
     mc_res = 1
@@ -57,6 +110,20 @@ def run(debug=False):
                 sim.substep(dt=dt, flip_ratio=0.95, gravity=-9.8,
                            num_pressure_iters=30)
             frame_count += 1
+            # V-t curve update
+            _vt_frame_idx += 1
+            if _vt_frame_idx % 2 == 0:
+                sim.compute_fluid_volume()
+                vr = sim._fluid_vol_ratio[0]
+                n = min(_vt_curve_np.shape[0], _vt_max_pts - 1)
+                px = 0.05 + n / _vt_max_pts * 0.9
+                py = 1.05 + max(0.0, min(1.0, (vr - 0.8) / 0.4)) * 0.17
+                pt = np.array([[px, py, 0.02]], dtype=np.float32)
+                if _vt_curve_np.shape[0] < _vt_max_pts:
+                    _vt_curve_np = np.vstack([_vt_curve_np, pt])
+                else:
+                    _vt_curve_np = np.roll(_vt_curve_np, -1, axis=0)
+                    _vt_curve_np[-1] = pt
 
         # Build surface mesh periodically
         if frame_count >= start_mesh_frame and frame_count % mesh_update_interval == 0 and not paused:
@@ -122,6 +189,9 @@ def run(debug=False):
         scene_obj.point_light(pos=(0.5, 0.8, 1.5), color=(0.3, 0.3, 0.6))
         scene_obj.ambient_light((0.2, 0.22, 0.28))
 
+        # Container wireframe
+        scene_obj.particles(box_field, radius=sim.dx * 0.05, color=(0.5, 0.5, 0.5))
+
         # Surface mesh
         if has_mesh and mesh_verts.shape[0] > 0:
             scene_obj.mesh(mesh_verts, mesh_tris,
@@ -129,18 +199,51 @@ def run(debug=False):
                           show_wireframe=False,
                           two_sided=True)
 
+        # V-t curve
+        n_vt = _vt_curve_np.shape[0]
+        if n_vt >= 2:
+            for i in range(n_vt):
+                _vt_curve_field[i] = _vt_curve_np[i]
+            for i in range(n_vt, _vt_max_pts):
+                _vt_curve_field[i] = _vt_curve_np[-1]
+            scene_obj.lines(_vt_curve_field, width=2.0, color=(0.2, 1.0, 0.4))
+
         canvas.scene(scene_obj)
 
         # --- GUI ---
         gui = window.get_gui()
-        with gui.sub_window("Controls", 0.02, 0.02, 0.18, 0.20) as g:
+        with gui.sub_window("Controls", 0.02, 0.02, 0.18, 0.24) as g:
+            dt = g.slider_float("dt", dt, 0.002, 0.02)
             if g.button("Pause/Resume"):
                 paused = not paused
+            if g.button("Reset Sim"):
+                sim.init_dam_break()
+                sim.relabel_and_density()
+                sim.init_colors()
+                sim.store_initial_density()
+                frame_count = 0
+                has_mesh = False
+                mc_density.fill(0.0)
             if g.button("Reset Camera"):
                 cam_target[:] = _init_target
                 cam_yaw = _init_yaw
                 cam_pitch = _init_pitch
                 cam_dist = _init_dist
+            if g.button("Stop GIF" if _recording else "Record GIF"):
+                if not _recording:
+                    _recording = True
+                    _record_dir = tempfile.mkdtemp(prefix="lab2rec_b5_")
+                    _record_count = 0
+                else:
+                    _recording = False
+                    if _record_dir:
+                        _save_gif_from_dir(_record_dir)
+                    _record_dir = None
+                    _record_count = 0
+            if _recording:
+                g.text(f"  REC {_record_count}")
+            sim.compute_fluid_volume()
+            g.text(f"  Vol ratio: {sim._fluid_vol_ratio[0]:.3f}")
             g.text(f"  Frame: {frame_count}")
             g.text(f"  Particles: {sim.num_particles}")
             if has_mesh:
@@ -148,6 +251,11 @@ def run(debug=False):
                 g.text(f"  Tris: {mesh_tris.shape[0] // 3}")
             else:
                 g.text(f"  Mesh: building...")
+
+        if _recording and frame_count % 3 == 0:
+            frame_path = os.path.join(_record_dir, f"frame_{_record_count:06d}.png")
+            window.save_image(frame_path)
+            _record_count += 1
 
         window.show()
 

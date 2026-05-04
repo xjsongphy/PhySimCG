@@ -1,6 +1,10 @@
 import time
+import os
+import shutil
+import tempfile
 import numpy as np
 import taichi as ti
+import imageio
 from lab2.core import FluidSimulator, scene_particle_count
 from lab2.flip import FLIPSimulator
 from lab2.apic import APICSimulator
@@ -198,6 +202,29 @@ def _ray_box_intersection(ray_origin, ray_dir, box_pos, box_quat, half_size):
     return max(tmin, 0.0)
 
 
+def _save_gif_from_dir(tmp_dir, fps=15):
+    """Read PNG frames from temp dir, combine into GIF, then clean up."""
+    import re
+    pngs = sorted(
+        [f for f in os.listdir(tmp_dir) if f.endswith(".png")],
+        key=lambda x: int(re.search(r'\d+', x).group())
+    )
+    if not pngs:
+        print("[record] No frames captured.")
+        return
+    frames = []
+    for p in pngs:
+        f = imageio.v3.imread(os.path.join(tmp_dir, p))
+        s = f[::2, ::2]
+        if s.shape[-1] == 4:
+            s = s[..., :3]
+        frames.append(s)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out = os.path.join(os.path.dirname(__file__), f"record_{ts}.gif")
+    imageio.mimsave(out, frames, fps=fps, loop=0)
+    shutil.rmtree(tmp_dir)
+    print(f"[record] GIF saved: {out} ({len(frames)} frames, {frames[0].shape[1]}x{frames[0].shape[0]}px)")
+
 def run_gui(
     sim: FluidSimulator,
     substep_fn,
@@ -215,6 +242,7 @@ def run_gui(
     show_color: bool = True,
     show_flip: bool = True,
     show_solver: bool = True,
+    show_volume: bool = False,  # V-t tracking for B2/B3
     sim_type: str = "FLIP",  # "FLIP", "APIC", or "Eulerian"
 ):
     if window_size is None:
@@ -265,6 +293,11 @@ def run_gui(
     sim_method = _sim_type if _sim_type != "Eulerian" else "FLIP"
     move_scale = 1.5
     animate_obstacle = False
+    animate_speed = 1.0
+    _recording = False
+    _record_dir = None
+    _record_count = 0
+    _record_frame = 0  # frame counter for periodic capture
     sim_time = 0.0
     shaking = False
     shake_strength = 3.0
@@ -283,6 +316,12 @@ def run_gui(
     _ms_frame = 0.0
     t_frame = time.perf_counter()
     _vol_history = []
+
+    # V-t curve polyline (rendered in 3D above container)
+    _vt_max_pts = 300
+    _vt_curve_np = np.zeros((0, 3), dtype=np.float32)
+    _vt_curve_field = ti.Vector.field(3, dtype=float, shape=(_vt_max_pts,))
+    _vt_frame_idx = 0
 
     while window.running:
         if debug_mode:
@@ -365,6 +404,9 @@ def run_gui(
                     new_method = "APIC" if _sim_type == "FLIP" else "FLIP"
                     _sim_type = new_method
                     _recreate = (current_scene, sim.nx, sim.ny, sim.nz, _sim_type)
+            # Volume ratio (always visible)
+            sim.compute_fluid_volume()
+            g.text(f"  Vol ratio: {sim._fluid_vol_ratio[0]:.3f}")
 
         # --- GUI: Obstacle ---
         if show_obstacle:
@@ -392,6 +434,8 @@ def run_gui(
                     g.text("  LMB: move | RMB: rotate")
                 if g.button("Animate ON" if not animate_obstacle else "Animate OFF"):
                     animate_obstacle = not animate_obstacle
+                if sim.obstacle_count[None] > 0:
+                    animate_speed = g.slider_float("animSpeed", animate_speed, 0.1, 5.0)
 
         # --- GUI: Color ---
         if show_color:
@@ -403,19 +447,34 @@ def run_gui(
                         current_color_mode = mode
 
         # --- GUI: Debug toggle ---
-        with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.08) as g:
+        with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.14) as g:
                 g.text("=== Debug ===")
                 if g.button("Debug ON" if not debug_mode else "Debug OFF"):
                     debug_mode = not debug_mode
+                if g.button("Stop GIF" if _recording else "Record GIF"):
+                    if not _recording:
+                        _recording = True
+                        _record_dir = tempfile.mkdtemp(prefix="lab2rec_")
+                        _record_count = 0
+                        _record_frame = 0
+                    else:
+                        _recording = False
+                        if _record_dir:
+                            _save_gif_from_dir(_record_dir)
+                        _record_dir = None
+                        _record_count = 0
+                if _recording:
+                    g.text(f"  REC {_record_count}")
 
         # --- GUI: Debug timing ---
         if debug_mode:
             stuck = sim.debug_count_stuck()
             if stuck > 0:
                 sim.debug_color_stuck_red()
-            _vol_history.append(sim._fluid_vol_ratio[0])
-            if len(_vol_history) > 200:
-                _vol_history.pop(0)
+            if show_volume and _prof_frame % 5 == 0:
+                _vol_history.append(sim._fluid_vol_ratio[0])
+                if len(_vol_history) > 200:
+                    _vol_history.pop(0)
 
             with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.38) as g:
                 g.text(f"Frame:    {_ms_frame:>6.1f} ms")
@@ -423,22 +482,32 @@ def run_gui(
                 g.text(f"Grid:     {sim.nx}x{sim.ny}x{sim.nz}")
                 g.text(f"Particles:{sim.num_particles}")
                 g.text(f"STUCK:    {stuck}  {'!!' if stuck else ''}")
-                g.text(f"Volume:   {sim._fluid_vol_ratio[0]:.3f}")
+                if show_volume:
+                    vol = sim._fluid_vol_ratio[0]
+                    g.text(f"Volume:   {vol:.3f}")
                 g.text(f"Time:     {sim_time:.2f} s")
-                # Mini V-t graph (text-based)
-                g.text("--- V-t (volume ratio) ---")
-                n_pts = len(_vol_history)
-                if n_pts > 1:
-                    step = max(1, n_pts // 20)
-                    for idx in range(0, n_pts, step):
-                        v = _vol_history[idx]
-                        bar_len = int(v * 15)
-                        bar = "#" * bar_len + "." * (15 - bar_len)
-                        g.text(f"  |{bar}|{v:.2f}")
-                g.text("--- avg per call (last ~1s) ---")
-                snap = _profiler.snapshot_and_reset()
-                for name, total, n, avg in snap[:6]:
-                    g.text(f"  {name:.<12s}{avg:6.1f}ms x{n}")
+                if show_volume:
+                    n_pts = len(_vol_history)
+                    if n_pts > 1:
+                        step = max(1, n_pts // 40)
+                        line = ""
+                        for idx in range(0, n_pts, step):
+                            v = _vol_history[idx]
+                            if v > 0.99:
+                                line += "#"
+                            elif v > 0.95:
+                                line += "="
+                            elif v > 0.85:
+                                line += "-"
+                            else:
+                                line += "."
+                        g.text(f"V-t: [{line}] {_vol_history[-1]:.2f}")
+                # Profiler: accumulate over ~1s (≈30 frames), snapshot & reset periodically
+                _prof_frame += 1
+                if _prof_frame % 30 == 0:
+                    snap = _profiler.snapshot_and_reset()
+                    for name, total, n, avg in snap[:6]:
+                        g.text(f"  {name:.<12s}{avg:6.1f}ms x{n}")
 
         # ==== Camera & Obstacle Interaction ====
         cx, cy = window.get_cursor_pos()
@@ -470,19 +539,23 @@ def run_gui(
         ray_dir = pt_on_plane - cam_pos
         ray_dir = ray_dir / (np.linalg.norm(ray_dir) + 1e-8)
 
-        # Ray-sphere / ray-box intersection for obstacle picking
+        # Obstacle picking: ray-sphere/ray-box with actual visual radius + small margin,
+        # plus screen-space fallback with per-obstacle visual threshold
         obs_count = sim.obstacle_count[None]
         picked_obs = -1
         if obs_count > 0:
             best_t = 1e30
+            tan_half_fov = np.tan(fov / 2)
             for o in range(min(obs_count, 4)):
+                obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                oc = cam_pos - obs_c
+
+                # ---- 3D ray intersection (primary) ----
                 if sim.obstacle_type[o] == 0:  # sphere
-                    obs_r = sim.obstacle_radius[o]
-                    if obs_r <= 0:
+                    world_r = sim.obstacle_radius[o]
+                    if world_r <= 0:
                         continue
-                    pick_r = max(obs_r * 10.0, 0.12)
-                    obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
-                    oc = cam_pos - obs_c
+                    pick_r = world_r * 1.3  # actual visual radius + 30% margin
                     a = ray_dir.dot(ray_dir)
                     b = 2.0 * oc.dot(ray_dir)
                     c = oc.dot(oc) - pick_r * pick_r
@@ -494,14 +567,47 @@ def run_gui(
                             picked_obs = o
                 else:  # box
                     sz = np.array([sim.obstacle_size[o][0], sim.obstacle_size[o][1], sim.obstacle_size[o][2]])
-                    box_pos_np = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                    box_pos_np = obs_c
                     quat_np = np.array([sim.obstacle_rotation[o][0], sim.obstacle_rotation[o][1],
                                         sim.obstacle_rotation[o][2], sim.obstacle_rotation[o][3]])
-                    pick_size = sz + 0.08
+                    pick_size = sz + 0.02
                     t = _ray_box_intersection(cam_pos, ray_dir, box_pos_np, quat_np, pick_size)
                     if t is not None and 0 < t < best_t:
                         best_t = t
                         picked_obs = o
+
+        # ---- Screen-space fallback (if ray didn't hit) ----
+        if picked_obs < 0 and obs_count > 0:
+            best_depth = 1e30
+            screen_fallback_done = False
+            for o in range(min(obs_count, 4)):
+                obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                to_obs = obs_c - cam_pos
+                depth = to_obs.dot(forward_n)
+                if depth <= 0:
+                    continue
+                right_dist = to_obs.dot(right_cam)
+                up_dist = to_obs.dot(cam_up)
+                hh = depth * tan_half_fov
+                hw = hh * aspect
+                if hw < 1e-8 or hh < 1e-8:
+                    continue
+                sx = (right_dist / hw + 1.0) / 2.0
+                sy = (1.0 + up_dist / hh) / 2.0
+                dist = np.sqrt((sx - cx) ** 2 + (sy - cy) ** 2)
+                # Obstacle visual radius on screen
+                if sim.obstacle_type[o] == 0:  # sphere
+                    world_r = sim.obstacle_radius[o]
+                    if world_r <= 0:
+                        continue
+                else:
+                    sz = sim.obstacle_size[o]
+                    world_r = max(sz[0], sz[1], sz[2])
+                screen_r = 0.5 * world_r / hh
+                threshold = max(screen_r * 1.5, 0.015)
+                if dist < threshold and depth < best_depth:
+                    best_depth = depth
+                    picked_obs = o
 
         # Obstacle interaction — sticky pick: latch onto obstacle on LMB press, drag until release
         if lmb and not prev_lmb:
@@ -528,7 +634,7 @@ def run_gui(
                     old = np.array([sim.obstacle_pos[drag_target][0],
                                    sim.obstacle_pos[drag_target][1],
                                    sim.obstacle_pos[drag_target][2]])
-                    new = old + right_cam * (-dx_mouse * move_scale) + cam_up * (dy_mouse * move_scale)
+                    new = old + right_cam * (dx_mouse * move_scale) + cam_up * (dy_mouse * move_scale)
                     new[0] = np.clip(new[0], 0.05, 0.95)
                     new[1] = np.clip(new[1], 0.05, 0.95)
                     new[2] = np.clip(new[2], 0.05, 0.95)
@@ -588,8 +694,8 @@ def run_gui(
         if animate_obstacle and sim.obstacle_count[None] > 0:
             t = sim_time
             old_pos = np.array([sim.obstacle_pos[0][0], sim.obstacle_pos[0][1], sim.obstacle_pos[0][2]])
-            cx = 0.5 + 0.25 * np.sin(t * 2.0)
-            cz = 0.5 + 0.25 * np.cos(t * 2.0)
+            cx = 0.5 + 0.25 * np.sin(t * 2.0 * animate_speed)
+            cz = 0.5 + 0.25 * np.cos(t * 2.0 * animate_speed)
             cy = old_pos[1]
             new_pos = np.array([cx, cy, cz])
             vel = (new_pos - old_pos) / max(current_dt, 1e-6)
@@ -614,6 +720,22 @@ def run_gui(
                     gravity=current_gravity,
                 )
             sim_time += current_dt * num_substeps
+            # V-t curve: sample every 2 frames
+            if not paused:
+                _vt_frame_idx += 1
+                if _vt_frame_idx % 2 == 0:
+                    sim.compute_fluid_volume()
+                    vr = sim._fluid_vol_ratio[0]
+                    # Map: X=time position (0.05..0.95), Y=volume ratio (1.05..1.22)
+                    n = min(_vt_curve_np.shape[0], _vt_max_pts - 1)
+                    px = 0.05 + n / _vt_max_pts * 0.9
+                    py = 1.05 + max(0.0, min(1.0, (vr - 0.8) / 0.4)) * 0.17
+                    pt = np.array([[px, py, 0.02]], dtype=np.float32)
+                    if _vt_curve_np.shape[0] < _vt_max_pts:
+                        _vt_curve_np = np.vstack([_vt_curve_np, pt])
+                    else:
+                        _vt_curve_np = np.roll(_vt_curve_np, -1, axis=0)
+                        _vt_curve_np[-1] = pt
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 
@@ -685,7 +807,23 @@ def run_gui(
                                    color=color, two_sided=True,
                                    instance_count=box_instance_count)
 
+        # V-t curve (volume ratio over time)
+        n_vt = _vt_curve_np.shape[0]
+        if n_vt >= 2:
+            # Pad unused field slots with last valid point to avoid stray lines
+            for i in range(_vt_curve_np.shape[0]):
+                _vt_curve_field[i] = _vt_curve_np[i]
+            for i in range(_vt_curve_np.shape[0], _vt_max_pts):
+                _vt_curve_field[i] = _vt_curve_np[-1]
+            scene.lines(_vt_curve_field, width=2.0, color=(0.2, 1.0, 0.4))
+
         canvas.scene(scene)
+        # Capture after scene set but before show() — framebuffer still valid
+        if _recording and _record_frame % 3 == 0:
+            frame_path = os.path.join(_record_dir, f"frame_{_record_count:06d}.png")
+            window.save_image(frame_path)
+            _record_count += 1
+        _record_frame += 1
         window.show()
         if debug_mode:
             _profiler.record("render", (time.perf_counter() - t_rend) * 1000)

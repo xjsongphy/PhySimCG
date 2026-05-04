@@ -5,7 +5,7 @@ from lab2.gui import run_gui
 
 
 def run(debug=False):
-    ti.init(arch=ti.vulkan)
+    ti.init(arch=ti.gpu)
 
     nx, ny, nz = 24, 48, 24
     scene = "Dam Break"

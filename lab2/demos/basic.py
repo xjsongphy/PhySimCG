@@ -5,7 +5,7 @@ from lab2.gui import run_gui
 
 
 def run(debug=False):
-    ti.init(arch=ti.vulkan)
+    ti.init(arch=ti.gpu)
 
     nx, ny, nz = 24, 48, 24
     scene = "Dam Break"
@@ -26,9 +26,10 @@ def run(debug=False):
         gravity=-9.8,
         window_title="Lab2 - FLIP Fluid",
         debug=debug,
+        show_obstacle=True,
         show_color=True,
-        show_flip=True,
-        show_solver=True,
+        show_flip=False,
+        show_solver=False,
     )
 
 

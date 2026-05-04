@@ -4,7 +4,7 @@ from lab2.gui import run_gui
 
 
 def run(debug=False):
-    ti.init(arch=ti.vulkan)
+    ti.init(arch=ti.gpu)
 
     nx, ny, nz = 32, 64, 32
     sim = EulerianSimulator(nx, ny, nz)
@@ -23,9 +23,11 @@ def run(debug=False):
         gravity=-9.8,
         window_title="Lab2 - B3 Eulerian Fluid",
         debug=debug,
+        show_obstacle=False,
         show_color=False,
         show_flip=False,
         show_solver=False,
+        sim_type="Eulerian",
     )
 
 

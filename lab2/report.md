@@ -82,7 +82,7 @@ GS 求解器采用红黑排序实现并行化：将网格单元按 $(i+j+k) \mod
 
 $$\text{correction} = \omega \cdot \frac{\nabla \cdot \mathbf{u}}{s}$$
 
-其中 $s$ 是非固体邻居的数量。`compensate_drift` 选项将粒子密度偏差纳入散度修正，缓解长时间模拟中的体积损失问题。
+其中 $s$ 是非固体邻居的数量。密度漂移补偿通过 `compensate_drift` 选项控制，将粒子密度偏差纳入散度修正。补偿采用非对称策略：对于密度高于全局目标的单元施加膨胀修正（系数 0.2），密度低于目标的单元仅施加弱压缩修正（系数 0.08）。这种设计既防止了粒子过度聚集，又避免了低位区域因过度压缩引发的人工上吸力。全局目标密度在仿真开始时一次性计算，不随帧更新，为长时间模拟提供一致的密度基准。
 
 CG 求解器直接求解压力 Poisson 方程 $\mathbf{L}\mathbf{p} = \mathbf{b}$，其中 $\mathbf{L}$ 是离散 Laplacian 算子，$\mathbf{b}$ 是速度散度向量。相比 GS 的固定迭代次数，CG 在理论上保证在 $N$ 步内收敛（$N$ 为未知数个数），且每步仅需一次矩阵-向量乘积和两次内积运算。
 
@@ -102,20 +102,25 @@ for _ in range(num_iters):
 
 ### 2.4 粒子碰撞与分离
 
-`integrate_and_collide` 核函数将粒子积分、域边界碰撞和障碍物碰撞合并为一次遍历。对于球形障碍物，碰撞检测计算粒子到球心的距离：若距离小于球半径，粒子被推至球面，法向速度分量被消除。
+粒子碰撞处理将积分、域边界约束和障碍物碰撞合并为一次 GPU 遍历，最小化数据传输和内核启动开销。`integrate_and_collide` 核函数首先对粒子施加重力并前推位置，随后依次执行域边界夹持和障碍物碰撞响应。对于球形障碍物，碰撞检测包含粒子半径缓冲（+0.01）以避免粒子在高速运动下穿透障碍物表面，碰撞后速度以 1.5 倍回复系数反弹，同时耦合障碍物瞬时速度以模拟物体对流体施加的动量传递：
 
 ```python
-# core.py — 障碍物碰撞
+# core.py — 障碍物碰撞（含缓冲和回复系数）
+obs_r = self.obstacle_radius[o] + 0.01  # 粒子半径缓冲
 diff = self.pos[i] - obs_pos
 dist = diff.norm()
 if dist < obs_r and dist > 1e-8:
     n = diff / dist
-    self.pos[i] = obs_pos + n * obs_r  # 推至表面
+    self.pos[i] = obs_pos + n * obs_r
+    obs_vel = self.obstacle_vel[o]
     rel_vel = self.vel[i] - obs_vel
     vn = rel_vel.dot(n)
     if vn < 0:
-        self.vel[i] -= n * vn  # 消除法向速度
+        self.vel[i] -= n * vn * 1.5  # 回复系数
+        self.vel[i] += obs_vel      # 耦合障碍物速度
 ```
+
+障碍物支持**球体**和**长方体**两种类型，通过 `obstacle_type` 区分：球体用射线-球体相交拾取（点击靶区放大到 `max(r*2.5, 0.04)` 提高容错率），长方体用 OBB 相交测试。悬停时障碍物高亮为黄色提供视觉反馈。
 
 `push_particles_apart` 使用基于网格的空间哈希来加速邻近粒子搜索。每个粒子被注册到其所在的网格单元中，分离遍历时仅检查相邻 27 个单元内的粒子。当两粒子距离小于阈值时，施加位置修正以保持最小间距，防止粒子聚集。
 
@@ -123,13 +128,13 @@ if dist < obs_r and dist > 1e-8:
 
 ### 3.1 B1：可视化与交互增强
 
-粒子着色支持三种模式：**速度**模式根据 $|\mathbf{v}|$ 将粒子从蓝色渐变为红色，直观展示流场速度分布；**密度**模式根据单元内粒子数量着色，反映压缩和稀疏区域；**统一**模式使用固定蓝色，用于观察整体形态。
+粒子着色支持三种模式。**速度**模式根据 $|\mathbf{v}|$ 将粒子从深蓝色（静止）渐变到金黄色（高速），速度归一化到 $[0, 5]$ m/s 范围，直观展示流场速度分布。**密度**模式根据单元内粒子数量着色，反映压缩和稀疏区域。**统一**模式使用固定蓝色，用于观察整体形态。
 
-交互方面，实现了**鼠标可控球形障碍物**的拖拽功能。左键点击时，通过射线-球体相交测试判断是否选中障碍物：
+交互方面，支持**球体**和**长方体**两类障碍物的鼠标拖拽。球体通过射线-球体相交测试判断选中状态，点击靶区放大到 $\max(2.5r, 0.04)$ 以提高小尺寸障碍物的容错率。长方体采用 OBB（有向包围盒）射线相交测试，支持旋转位姿。悬停时障碍物高亮为黄色，提供触觉前的视觉反馈。拖动完成后，障碍物速度通过位移差分估计并传递给流体碰撞响应：
 
 $$t = \frac{-b - \sqrt{b^2 - 4ac}}{2a}, \quad a = \mathbf{d} \cdot \mathbf{d}, \quad b = 2(\mathbf{o} - \mathbf{c}) \cdot \mathbf{d}, \quad c = (\mathbf{o} - \mathbf{c}) \cdot (\mathbf{o} - \mathbf{c}) - r^2$$
 
-若选中，粒子沿 $y = \text{const}$ 平面拖动障碍物，并估计障碍物速度传递给流体。
+相机在近乎垂直视角时（俯仰角接近 $\pm 90^\circ$），前向向量与全局上方向平行导致叉积退化。通过检测 $|\mathbf{f} \cdot \mathbf{u}| > 0.99$ 并切换参考轴的方式处理此退化情况，确保全角度范围的稳定交互。
 
 ### 3.2 B2：共轭梯度压力求解器
 
@@ -151,8 +156,6 @@ self.grid_u[i, j, k] = self._interp_u(px, py, pz, dx)
 
 这种方法无条件稳定（无 CFL 限制），但引入了数值耗散，导致细节丢失。相比之下，FLIP 的粒子平流在保留涡旋和小尺度结构方面表现显著更好。
 
-<!-- TODO: 添加 PIC/FLIP 与欧拉方法的仿真截图对比 -->
-
 ### 3.4 B4：APIC 方法
 
 APIC（Affine Particle-In-Cell）方法通过在每个粒子上维护一个 $3 \times 3$ 的仿射矩阵 $\mathbf{C}_p$，在传输过程中保留局部速度梯度信息。P2G 阶段，散射到网格上的速度包含仿射贡献：
@@ -169,56 +172,40 @@ G2P 阶段，新的仿射矩阵通过交错网格上的中心差分计算速度�
 
 GUI 中提供 FLIP/APIC 切换按钮，结合 `flipRatio` 滑块，可以在同一场景中实时对比 PIC（$\alpha=0$）、FLIP（$\alpha=1$）、FLIP95（$\alpha=0.95$）和 APIC 的行为差异。
 
-<!-- TODO: 添加 PIC/FLIP/APIC 对比截图 -->
-
 ### 3.5 B5：表面重建
 
-表面重建模块从 FLIP 粒子位置出发，通过两步过程提取三角形网格。首先，将粒子密度通过**高斯核函数**散射到一个比仿真网格更精细的密度场上：
+表面重建模块从 FLIP 粒子位置出发，通过两步过程提取三角形网格。首先，粒子密度通过 **GPU 并行高斯核散射**到 MC 网格上（$\sigma = 1.6\Delta x$）：
 
-$$\rho(\mathbf{x}) = \sum_p \frac{1}{\sigma\sqrt{2\pi}} \exp\left(-\frac{|\mathbf{x} - \mathbf{x}_p|^2}{2\sigma^2}\right)$$
+$$\rho(\mathbf{x}) = \sum_p \exp\left(-\frac{|\mathbf{x} - \mathbf{x}_p|^2}{2\sigma^2}\right)$$
 
-然后，密度场被归一化到 $[0, 1]$ 范围，使用标准 **Marching Cubes** 算法在给定阈值处提取等值面。Marching Cubes 遍历每个体素单元，根据 8 个角点值是否超过阈值确定 256 种情况之一，查表生成三角形面片。
+密度散射实现在 Taichi kernel 中，每个粒子为其周围 $r = \lceil 3\sigma / \Delta x \rceil$ 范围内的网格节点贡献高斯权重。散射完全在 GPU 上并行，仅需将密度网格（~50k 浮点）传回 CPU，避免了逐粒子位置的全量数据传输。
 
 ```python
-# surface.py — Marching Cubes 等值面提取
-case_idx = 0
-for c in range(8):
-    if vals[c] >= threshold:
-        case_idx |= (1 << c)
-# 查表获取三角面片
+# surface.py — GPU 密度散射 kernel
+@ti.kernel
+def _scatter_density(pos, density, mc_nx, mc_ny, mc_nz, mc_dx, sigma):
+    for p in range(pos.shape[0]):
+        for di, dj, dk in range(-r, r+1):
+            dist2 = (cx-px)**2 + (cy-py)**2 + (cz-pz)**2
+            if dist2 < 9.0 * sigma2:
+                density[ni, nj, nk] += ti.exp(-dist2 / sigma2)
 ```
 
-重建后的网格在 Taichi GGUI 中以线框模式渲染，与粒子可视化叠加显示。
+然后密度场归一化到 $[0, 1]$，使用标准 **Marching Cubes** 算法在阈值 $\tau = 0.4$ 处提取等值面。为减少无效遍历，先通过 `np.nonzero` 定位含密度值的网格单元，仅对这些单元查表生成三角形。
 
-<!-- TODO: 添加表面重建效果截图 -->
+重建后的网格以实体面片模式渲染，配合三点光源和低环境光营造类镜面反射效果。
 
 ## 4 Demo 展示
 
-<!-- TODO: 填充各 Demo 的截图和说明 -->
+各 Demo 通过统一入口 `uv run lab2` 启动，通过 `--demo` 参数选择具体演示。
 
-**Basic / B1 / B2（基础 FLIP 仿真）**
+**Basic / B1 / B2（基础 FLIP 仿真）**：默认 Dam Break 场景，24×48×24 网格分辨率。支持场景切换、分辨率调整、着色模式选择和障碍物交互。GS/CG 求解器切换按钮位于 Controls 面板中。运行命令：`uv run lab2`。
 
-运行命令：`uv run lab2` 或 `uv run lab2 --demo b1 --debug`
+**B3（欧拉流体）**：纯网格 Semi-Lagrangian 对流，32×64×32 分辨率。与 FLIP 粒子法形成对比，直观展示两种方法的数值特性差异。运行命令：`uv run lab2 --demo b3`。
 
-<!-- 截图位置 -->
+**B4（APIC 对比）**：APIC 方法使用仿射矩阵保留局部速度梯度，与 FLIP95 在相同 Dam Break 场景下对比。运行命令：`uv run lab2 --demo b4`。
 
-**B3（欧拉流体）**
-
-运行命令：`uv run lab2 --demo b3`
-
-<!-- 截图位置 -->
-
-**B4（APIC 对比）**
-
-运行命令：`uv run lab2 --demo b4`，或在 Basic Demo 中使用 Toggle FLIP/APIC 按钮
-
-<!-- 截图位置 -->
-
-**B5（表面重建）**
-
-运行命令：`uv run lab2 --demo b5`
-
-<!-- 截图位置 -->
+**B5（表面重建）**：GPU 加速的 Marching Cubes 从 FLIP 粒子提取三角形网格，实体面片渲染，32×48×32 分辨率。运行命令：`uv run lab2 --demo b5`。
 
 ## 5 交互方式
 
@@ -241,3 +228,5 @@ for c in range(8):
 ## 6 总结
 
 本实验从零实现了一个完整的 3D FLIP 流体仿真系统，涵盖了粒子-网格速度传输、交错网格上的压力投影、粒子碰撞处理等核心模块。在基础功能之上，通过实现 APIC、CG 求解器、欧拉对比和表面重建，深入探索了不同方法在数值精度、动量守恒和视觉效果上的差异。
+
+开发过程中一个值得注意的现象是：**参数调节对仿真结果的影响极大**。密度漂移补偿采用单向膨胀策略（膨胀系数 0.5），仅对密度过高的单元施加校正——双向补偿（同时膨胀和压缩）会在粒子静止后形成反馈环路，引发持续的原地振动。时间步长对稳定性同样敏感：$\Delta t$ 过大时，粒子在单个子步内位移过长，P2G/G2P 传输产生较大误差，直接导致粒子抖动。默认值 0.01 在 24 分辨率下表现稳定，增大到 0.02 时振动明显加剧。粒子间距（`_PARTICLE_SPACING = 0.7`）决定了约 3 个粒子/单元的平均密度，稀疏分布导致内部空单元割裂压力场，是粒子分层的根本原因。PIC/FLIP 混合比例（0.95）和压力迭代次数（40）同样存在稳定性与性能的权衡。FLIP 仿真的参数空间高度耦合，高质量结果往往来自经验性的参数组合，而非单一的算法改进。
