@@ -2,17 +2,21 @@ import taichi as ti
 import taichi.math as tm
 
 
+# Particle spacing as fraction of grid cell size (smaller = more particles, better packing)
+_PARTICLE_SPACING = 0.7
+
 def scene_particle_count(scene_name: str, nx: int) -> int:
     """Compute exact particle count for a scene at given grid resolution."""
     dx = 1.0 / nx
+    sp = dx * _PARTICLE_SPACING
 
     if scene_name == "Dam Break":
         lo_x, hi_x = 0.05, 0.45
         lo_y, hi_y = 0.05, 0.85
         lo_z, hi_z = 0.05, 0.45
-        npx = int((hi_x - lo_x) / dx)
-        npy = int((hi_y - lo_y) / dx)
-        npz = int((hi_z - lo_z) / dx)
+        npx = int((hi_x - lo_x) / sp)
+        npy = int((hi_y - lo_y) / sp)
+        npz = int((hi_z - lo_z) / sp)
         return npx * npy * npz
 
     elif scene_name == "Drop":
@@ -24,18 +28,18 @@ def scene_particle_count(scene_name: str, nx: int) -> int:
         hi_y = cy + r
         lo_z = cz - r
         hi_z = cz + r
-        npx = int((hi_x - lo_x) / dx)
-        npy = int((hi_y - lo_y) / dx)
-        npz = int((hi_z - lo_z) / dx)
+        npx = int((hi_x - lo_x) / sp)
+        npy = int((hi_y - lo_y) / sp)
+        npz = int((hi_z - lo_z) / sp)
         return npx * npy * npz
 
     elif scene_name == "Double Dam":
-        npx1 = int((0.25 - 0.05) / dx)
-        npy1 = int((0.65 - 0.05) / dx)
-        npz1 = int((0.45 - 0.05) / dx)
-        npx2 = int((0.95 - 0.75) / dx)
-        npy2 = int((0.65 - 0.05) / dx)
-        npz2 = int((0.95 - 0.55) / dx)
+        npx1 = int((0.25 - 0.05) / sp)
+        npy1 = int((0.65 - 0.05) / sp)
+        npz1 = int((0.45 - 0.05) / sp)
+        npx2 = int((0.95 - 0.75) / sp)
+        npy2 = int((0.65 - 0.05) / sp)
+        npz2 = int((0.95 - 0.55) / sp)
         return npx1 * npy1 * npz1 + npx2 * npy2 * npz2
 
     elif scene_name == "Dam Break with Obstacle":
@@ -45,9 +49,9 @@ def scene_particle_count(scene_name: str, nx: int) -> int:
         box_x = hi_x - lo_x
         box_y = hi_y - lo_y
         box_z = hi_z - lo_z
-        npx = int(box_x / dx)
-        npy = int(box_y / dx)
-        npz = int(box_z / dx)
+        npx = int(box_x / sp)
+        npy = int(box_y / sp)
+        npz = int(box_z / sp)
         return npx * npy * npz
 
     return 0
@@ -90,7 +94,7 @@ class FluidSimulator:
         self.cell_type = ti.field(dtype=int, shape=(nx, ny, nz))
 
         self.particle_density = ti.field(dtype=float, shape=(nx, ny, nz))
-        self.particle_density_init = ti.field(dtype=float, shape=(nx, ny, nz))
+        self._target_density = ti.field(dtype=float, shape=())
 
         self.grid_u_weight = ti.field(dtype=float, shape=(nx + 1, ny, nz))
         self.grid_v_weight = ti.field(dtype=float, shape=(nx, ny + 1, nz))
@@ -134,6 +138,7 @@ class FluidSimulator:
     @ti.kernel
     def init_dam_break(self):
         dx = self.dx
+        sp = dx * 0.7
         lo_x, hi_x = 0.05, 0.45
         lo_y, hi_y = 0.05, 0.85
         lo_z, hi_z = 0.05, 0.45
@@ -141,26 +146,22 @@ class FluidSimulator:
         box_y = hi_y - lo_y
         box_z = hi_z - lo_z
 
-        # Calculate maximum number of particles that can fit in the box
-        npx = int(box_x / dx)
-        npy = int(box_y / dx)
-        npz = int(box_z / dx)
+        npx = int(box_x / sp)
+        npy = int(box_y / sp)
+        npz = int(box_z / sp)
         max_particles = npx * npy * npz
 
-        # Use exactly max_particles (don't exceed)
         for i in range(max_particles):
             ix = i % npx
             iy = (i // npx) % npy
             iz = i // (npx * npy)
-            # Center particles in cells
             self.pos[i] = [
-                lo_x + (ix + 0.5) * dx,
-                lo_y + (iy + 0.5) * dx,
-                lo_z + (iz + 0.5) * dx,
+                lo_x + (ix + 0.5) * sp,
+                lo_y + (iy + 0.5) * sp,
+                lo_z + (iz + 0.5) * sp,
             ]
             self.vel[i] = [0.0, 0.0, 0.0]
 
-        # Mark any extra particles (if num_particles > max_particles) as inactive
         for i in range(max_particles, self.num_particles):
             self.pos[i] = [-100.0, -100.0, -100.0]
             self.vel[i] = [0.0, 0.0, 0.0]
@@ -181,27 +182,25 @@ class FluidSimulator:
         obs_height = 0.4   # Height of the cylinder (reduced from 0.6)
         obs_center_y = 0.5 # Center of cylinder in Y (moved up)
 
-        # Calculate maximum number of particles that can fit
-        npx = int(box_x / dx)
-        npy = int(box_y / dx)
-        npz = int(box_z / dx)
+        npx = int(box_x / (dx * 0.7))
+        npy = int(box_y / (dx * 0.7))
+        npz = int(box_z / (dx * 0.7))
         max_particles = npx * npy * npz
 
         # Set obstacle (1 cylinder at center)
         self.obstacle_count[None] = 1
-        # Cylinder obstacle: position, velocity (0), radius
         self.obstacle_pos[0] = [0.25, obs_center_y, 0.25]
         self.obstacle_vel[0] = [0.0, 0.0, 0.0]
         self.obstacle_radius[0] = obs_radius
 
-        # Use exactly max_particles (don't exceed)
+        sp = dx * 0.7
         for i in range(max_particles):
             ix = i % npx
             iy = (i // npx) % npy
             iz = i // (npx * npy)
-            x = lo_x + (ix + 0.5) * dx
-            y = lo_y + (iy + 0.5) * dx
-            z = lo_z + (iz + 0.5) * dx
+            x = lo_x + (ix + 0.5) * sp
+            y = lo_y + (iy + 0.5) * sp
+            z = lo_z + (iz + 0.5) * sp
 
             # Check if particle is inside the cylinder obstacle
             dist_xy = (x - 0.25) ** 2 + (z - 0.25) ** 2
@@ -235,6 +234,7 @@ class FluidSimulator:
     @ti.kernel
     def init_drop(self):
         dx = self.dx
+        sp = dx * 0.7
         cx, cy, cz = 0.5, 0.75, 0.5
         radius = 0.15
         lo_x = cx - radius
@@ -244,85 +244,78 @@ class FluidSimulator:
         lo_z = cz - radius
         hi_z = cz + radius
 
-        # Calculate maximum number of particles that can fit in the sphere
         box_x = hi_x - lo_x
         box_y = hi_y - lo_y
         box_z = hi_z - lo_z
-        npx = int(box_x / dx)
-        npy = int(box_y / dx)
-        npz = int(box_z / dx)
+        npx = int(box_x / sp)
+        npy = int(box_y / sp)
+        npz = int(box_z / sp)
         max_particles = npx * npy * npz
 
-        # Only use particles within the sphere
-        count = 0
-        for i in range(max_particles):
-            ix = i % npx
-            iy = (i // npx) % npy
-            iz = i // (npx * npy)
-            x = lo_x + (ix + 0.5) * dx
-            y = lo_y + (iy + 0.5) * dx
-            z = lo_z + (iz + 0.5) * dx
+        for i in range(self.num_particles):
+            if i < max_particles:
+                ix = i % npx
+                iy = (i // npx) % npy
+                iz = i // (npx * npy)
+                x = lo_x + (ix + 0.5) * sp
+                y = lo_y + (iy + 0.5) * sp
+                z = lo_z + (iz + 0.5) * sp
 
-            # Check if particle is inside the sphere
-            dx_dist = x - cx
-            dy_dist = y - cy
-            dz_dist = z - cz
-            dist2 = dx_dist * dx_dist + dy_dist * dy_dist + dz_dist * dz_dist
+                dx_dist = x - cx
+                dy_dist = y - cy
+                dz_dist = z - cz
+                dist2 = dx_dist * dx_dist + dy_dist * dy_dist + dz_dist * dz_dist
 
-            if dist2 <= radius * radius:
-                self.pos[count] = [x, y, z]
-                self.vel[count] = [0.0, 0.0, 0.0]
-                count += 1
-
-        # Mark any extra particles as inactive
-        for i in range(count, self.num_particles):
-            self.pos[i] = [-100.0, -100.0, -100.0]
+                if dist2 <= radius * radius:
+                    self.pos[i] = [x, y, z]
+                else:
+                    self.pos[i] = [-100.0, -100.0, -100.0]
+            else:
+                self.pos[i] = [-100.0, -100.0, -100.0]
             self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_double_dam(self):
         dx = self.dx
+        sp = dx * 0.7
         lo_x1, hi_x1 = 0.05, 0.25
         lo_y1, hi_y1 = 0.05, 0.65
         lo_z1, hi_z1 = 0.05, 0.45
-        npx1 = int((hi_x1 - lo_x1) / dx)
-        npy1 = int((hi_y1 - lo_y1) / dx)
-        npz1 = int((hi_z1 - lo_z1) / dx)
+        npx1 = int((hi_x1 - lo_x1) / sp)
+        npy1 = int((hi_y1 - lo_y1) / sp)
+        npz1 = int((hi_z1 - lo_z1) / sp)
         count1 = npx1 * npy1 * npz1
         lo_x2, hi_x2 = 0.75, 0.95
         lo_y2, hi_y2 = 0.05, 0.65
         lo_z2, hi_z2 = 0.55, 0.95
-        npx2 = int((hi_x2 - lo_x2) / dx)
-        npy2 = int((hi_y2 - lo_y2) / dx)
-        npz2 = int((hi_z2 - lo_z2) / dx)
+        npx2 = int((hi_x2 - lo_x2) / sp)
+        npy2 = int((hi_y2 - lo_y2) / sp)
+        npz2 = int((hi_z2 - lo_z2) / sp)
+        total = count1 + npx2 * npy2 * npz2
 
-        count = 0
         for i in range(self.num_particles):
-            if count >= count1 and count < count1 + npx2 * npy2 * npz2:
-                idx = count - count1
+            if i < count1:
+                ix = i % npx1
+                iy = (i // npx1) % npy1
+                iz = i // (npx1 * npy1)
+                self.pos[i] = [
+                    lo_x1 + (ix + 0.5) * sp,
+                    lo_y1 + (iy + 0.5) * sp,
+                    lo_z1 + (iz + 0.5) * sp,
+                ]
+            elif i < total:
+                idx = i - count1
                 ix = idx % npx2
                 iy = (idx // npx2) % npy2
                 iz = idx // (npx2 * npy2)
-                self.pos[count] = [
-                    lo_x2 + (ix + 0.5) * dx,
-                    lo_y2 + (iy + 0.5) * dx,
-                    lo_z2 + (iz + 0.5) * dx,
-                ]
-            elif count < count1:
-                ix = count % npx1
-                iy = (count // npx1) % npy1
-                iz = count // (npx1 * npy1)
-                self.pos[count] = [
-                    lo_x1 + (ix + 0.5) * dx,
-                    lo_y1 + (iy + 0.5) * dx,
-                    lo_z1 + (iz + 0.5) * dx,
+                self.pos[i] = [
+                    lo_x2 + (ix + 0.5) * sp,
+                    lo_y2 + (iy + 0.5) * sp,
+                    lo_z2 + (iz + 0.5) * sp,
                 ]
             else:
-                # Mark extra particles as inactive
-                self.pos[count] = [-100.0, -100.0, -100.0]
-
-            self.vel[count] = [0.0, 0.0, 0.0]
-            count += 1
+                self.pos[i] = [-100.0, -100.0, -100.0]
+            self.vel[i] = [0.0, 0.0, 0.0]
 
     @ti.kernel
     def init_colors(self):
@@ -386,7 +379,7 @@ class FluidSimulator:
 
     @ti.kernel
     def relabel_and_density(self):
-        """Combined: relabel cells + update particle density in one pass."""
+        """Combined: relabel cells + update particle density + compute target density."""
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             if self.cell_type[i, j, k] != 2:
                 self.cell_type[i, j, k] = 1  # air
@@ -400,6 +393,17 @@ class FluidSimulator:
             if 0 <= ci < self.nx and 0 <= cj < self.ny and 0 <= ck < self.nz:
                 self.cell_type[ci, cj, ck] = 0  # fluid
                 self.particle_density[ci, cj, ck] += 1.0
+
+    @ti.kernel
+    def _compute_target_density(self):
+        """Compute global average density: total particles in fluid cells / fluid cell count."""
+        total = 0.0
+        cells = 0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+            if self.cell_type[i, j, k] == 0:
+                total += self.particle_density[i, j, k]
+                cells += 1
+        self._target_density[None] = total / max(cells, 1)
 
     # ---- Simulation Kernels ----
 
@@ -505,22 +509,17 @@ class FluidSimulator:
             if 0 <= ci < self.nx and 0 <= cj < self.ny and 0 <= ck < self.nz:
                 self.particle_density[ci, cj, ck] += 1.0
 
-    @ti.kernel
     def store_initial_density(self):
-        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            self.particle_density_init[i, j, k] = self.particle_density[i, j, k]
+        self._compute_target_density()
 
     @ti.kernel
-    def apply_perturbation(self, center_x: float, center_y: float, center_z: float,
-                           strength: float):
+    def apply_horizontal_impulse(self, impulse_x: float, impulse_z: float):
+        """Apply a horizontal velocity impulse to all active particles."""
         for i in range(self.num_particles):
             if self.pos[i][0] < 0:
                 continue
-            diff = self.pos[i] - tm.vec3([center_x, center_y, center_z])
-            dist = diff.norm()
-            if 0.01 < dist < 0.3:
-                n = diff / dist
-                self.vel[i] += n * strength * (0.3 - dist) / 0.3
+            self.vel[i][0] += impulse_x
+            self.vel[i][2] += impulse_z
 
     # ---- Gauss-Seidel Pressure Projection (Red-Black) ----
 
@@ -573,9 +572,9 @@ class FluidSimulator:
             if compensate_drift:
                 density_diff = (
                     self.particle_density[i, j, k]
-                    - self.particle_density_init[i, j, k]
+                    - self._target_density[None]
                 )
-                div -= density_diff * 0.05
+                div -= density_diff * 0.008
 
             correction = over_relaxation * div / s
 
@@ -650,9 +649,9 @@ class FluidSimulator:
             if compensate_drift:
                 density_diff = (
                     self.particle_density[i, j, k]
-                    - self.particle_density_init[i, j, k]
+                    - self._target_density[None]
                 )
-                div -= density_diff * 0.05
+                div -= density_diff * 0.008
             self._cg_r[i, j, k] = div
 
     @ti.kernel

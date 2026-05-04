@@ -8,15 +8,23 @@ from collections import defaultdict
 
 
 def _get_screen_resolution() -> tuple:
-    try:
-        import tkinter as tk
-        root = tk.Tk()
-        width = root.winfo_screenwidth()
-        height = root.winfo_screenheight()
-        root.destroy()
-        return (width, height)
-    except Exception:
-        return (1920, 1080)
+    import sys, ctypes
+    if sys.platform == 'darwin':
+        try:
+            import ctypes.util
+            cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreGraphics'))
+            display = cg.CGMainDisplayID()
+            return (cg.CGDisplayPixelsWide(display),
+                    cg.CGDisplayPixelsHigh(display))
+        except Exception:
+            pass
+    elif sys.platform == 'win32':
+        try:
+            user32 = ctypes.windll.user32
+            return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+        except Exception:
+            pass
+    return (1920, 1080)
 
 
 SCENES = ["Dam Break", "Drop", "Double Dam"]
@@ -122,11 +130,11 @@ def run_gui(
     # Save initial volume for V-t tracking
     sim.save_init_volume()
 
-    # Camera state (OrbitCamera-style)
+    # Camera state
     cam_target = np.array([0.5, 0.4, 0.5], dtype=np.float32)
-    cam_yaw = -1.57     # radians, horizontal orbit angle
-    cam_pitch = 0.45    # radians, vertical orbit angle
-    cam_dist = 1.8      # distance from target
+    cam_yaw = -1.57
+    cam_pitch = 0.45
+    cam_dist = 1.8
     cam_pos = np.array([0.5, 1.0, 2.2], dtype=np.float32)
 
     # Container box
@@ -148,6 +156,7 @@ def run_gui(
     sim_method = "FLIP"  # "FLIP" or "APIC"
     animate_obstacle = False
     sim_time = 0.0
+    shaking = False
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -187,8 +196,8 @@ def run_gui(
             for name in SCENES:
                 if g.button(name):
                     _recreate = (name, sim.nx, sim.ny, sim.nz)
-            if g.button("Perturb!"):
-                sim.apply_perturbation(0.5, 0.4, 0.5, 6.0)
+            if g.button("Shake ON" if not shaking else "Shake OFF"):
+                shaking = not shaking
 
         # --- GUI: Resolution ---
         if show_resolution:
@@ -332,14 +341,19 @@ def run_gui(
                         best_t = t
                         picked_obs = o
 
-        # Obstacle dragging (camera-relative, like vcx-sim)
+        # Obstacle dragging (camera-relative)
         dragging_obs = False
         moving_obs_vert = False
         if prev_cursor_valid:
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
 
-            # Move speed: full screen drag ≈ 1 world unit
+            # Dead zone: ignore tiny movements from click jitter
+            mouse_moved = abs(dx_mouse) > 0.002 or abs(dy_mouse) > 0.002
+            if not mouse_moved:
+                dx_mouse = 0.0
+                dy_mouse = 0.0
+
             move_scale = 1.5
 
             # LMB: drag obstacle in camera plane
@@ -413,6 +427,14 @@ def run_gui(
         if debug_mode:
             t_sim = time.perf_counter()
         if not paused:
+            # Container shake: sinusoidal horizontal impulse
+            if shaking:
+                freq = 1.2
+                amp = 20.0
+                gx = amp * np.sin(sim_time * freq * 2 * np.pi)
+                gz = amp * np.cos(sim_time * freq * 2 * np.pi) * 0.7
+                sim.apply_horizontal_impulse(gx * current_dt, gz * current_dt)
+
             if sim.obstacle_count[None] > 0:
                 sim.mark_obstacle_cells()
             for _ in range(num_substeps):
