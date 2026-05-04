@@ -26,7 +26,9 @@ def run(debug=False):
         show_obstacle=False,
         show_color=False,
         show_flip=False,
-        show_solver=False,
+        show_solver=True,   # Enable CG/GS solver toggle
+        show_volume=True,
+        show_debug_toggle=True,
         sim_type="Eulerian",
     )
 

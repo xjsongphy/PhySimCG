@@ -102,6 +102,89 @@ def _build_box_geometry():
     inf.from_numpy(indices)
     return vf, inf
 
+
+# Unit cube vertices for ray-triangle intersection (same as rendering)
+_BOX_VERTS = np.array([
+    [-0.5, -0.5, -0.5], [ 0.5, -0.5, -0.5], [ 0.5,  0.5, -0.5], [-0.5,  0.5, -0.5],
+    [-0.5, -0.5,  0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5,  0.5], [-0.5,  0.5,  0.5],
+], dtype=np.float32)
+
+_BOX_INDICES = np.array([
+    0,1,2, 0,2,3,  # -Z
+    4,6,5, 4,7,6,  # +Z
+    0,3,7, 0,7,4,  # -X
+    1,5,6, 1,6,2,  # +X
+    0,4,5, 0,5,1,  # -Y
+    3,2,6, 3,6,7,  # +Y
+], dtype=np.int32)
+
+
+def _ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2):
+    """Möller-Trumbore ray-triangle intersection. Returns t value or None."""
+    EPSILON = 1e-6
+
+    edge1 = v1 - v0
+    edge2 = v2 - v0
+    h = np.cross(ray_dir, edge2)
+    a = np.dot(edge1, h)
+
+    if abs(a) < EPSILON:
+        return None  # Ray is parallel to triangle
+
+    f = 1.0 / a
+    s = ray_origin - v0
+    u = f * np.dot(s, h)
+
+    if u < 0.0 or u > 1.0:
+        return None
+
+    q = np.cross(s, edge1)
+    v = f * np.dot(ray_dir, q)
+
+    if v < 0.0 or u + v > 1.0:
+        return None
+
+    t = f * np.dot(edge2, q)
+
+    if t < EPSILON:
+        return None
+
+    return t
+
+
+def _ray_box_intersect_triangles(ray_origin, ray_dir, box_pos, box_quat, box_size):
+    """Ray-box intersection using actual triangle mesh (same as rendering).
+    Returns the closest t value or None."""
+    # Get rotation matrix
+    R = _quat_to_matrix(box_quat)
+
+    # Transform unit cube vertices to world space
+    # This matches the rendering transform exactly
+    world_verts = []
+    for v in _BOX_VERTS:
+        # Scale to size, then rotate, then translate
+        scaled = v * box_size * 2.0  # Unit cube * 2 = full size, then * box_size
+        rotated = R @ scaled
+        world = rotated + box_pos
+        world_verts.append(world)
+
+    world_verts = np.array(world_verts)
+
+    # Find closest intersection with all triangles
+    closest_t = None
+
+    for i in range(0, len(_BOX_INDICES), 3):
+        v0 = world_verts[_BOX_INDICES[i]]
+        v1 = world_verts[_BOX_INDICES[i+1]]
+        v2 = world_verts[_BOX_INDICES[i+2]]
+
+        t = _ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2)
+        if t is not None:
+            if closest_t is None or t < closest_t:
+                closest_t = t
+
+    return closest_t
+
 class _Profiler:
     """Lightweight frame profiler. Only active when debug_mode is True."""
     def __init__(self):
@@ -174,34 +257,6 @@ def _make_box_edges(lo, hi, n=30):
     return np.array(pts, dtype=np.float32)
 
 
-def _ray_box_intersection(ray_origin, ray_dir, box_pos, box_quat, half_size):
-    """Return min t > 0 if ray hits OBB, else None.
-    Transforms ray to box local space, then does slab-test AABB."""
-    q_inv = np.array([box_quat[0], -box_quat[1], -box_quat[2], -box_quat[3]])
-    local_org = np.array(ray_origin) - np.array(box_pos)
-    lo = np.array([local_org[0], local_org[1], local_org[2], 0.0])
-    lo_rot = _quat_mul(_quat_mul(q_inv, lo), box_quat)
-    local_origin = np.array([lo_rot[1], lo_rot[2], lo_rot[3]])
-    ld = np.array([ray_dir[0], ray_dir[1], ray_dir[2], 0.0])
-    ld_rot = _quat_mul(_quat_mul(q_inv, ld), box_quat)
-    local_dir = np.array([ld_rot[1], ld_rot[2], ld_rot[3]])
-    hs = np.array(half_size)
-    tmin, tmax = -1e30, 1e30
-    for d in range(3):
-        if abs(local_dir[d]) > 1e-12:
-            inv_d = 1.0 / local_dir[d]
-            t1 = (-hs[d] - local_origin[d]) * inv_d
-            t2 = ( hs[d] - local_origin[d]) * inv_d
-            tmin = max(tmin, min(t1, t2))
-            tmax = min(tmax, max(t1, t2))
-        else:
-            if local_origin[d] < -hs[d] or local_origin[d] > hs[d]:
-                return None
-    if tmin > tmax or tmax < 0:
-        return None
-    return max(tmin, 0.0)
-
-
 def _save_gif_from_dir(tmp_dir, fps=15):
     """Read PNG frames from temp dir, combine into GIF, then clean up."""
     import re
@@ -243,6 +298,7 @@ def run_gui(
     show_flip: bool = True,
     show_solver: bool = True,
     show_volume: bool = False,  # V-t tracking for B2/B3
+    show_debug_toggle: bool = False,  # debug on/off button for B2/B3/B4
     sim_type: str = "FLIP",  # "FLIP", "APIC", or "Eulerian"
 ):
     if window_size is None:
@@ -404,9 +460,9 @@ def run_gui(
                     new_method = "APIC" if _sim_type == "FLIP" else "FLIP"
                     _sim_type = new_method
                     _recreate = (current_scene, sim.nx, sim.ny, sim.nz, _sim_type)
-            # Volume ratio (always visible)
-            sim.compute_fluid_volume()
-            g.text(f"  Vol ratio: {sim._fluid_vol_ratio[0]:.3f}")
+            if show_volume and debug_mode:
+                sim.compute_fluid_volume()
+                g.text(f"  Vol ratio: {sim._fluid_vol_ratio[0]:.3f}")
 
         # --- GUI: Obstacle ---
         if show_obstacle:
@@ -448,23 +504,24 @@ def run_gui(
 
         # --- GUI: Debug toggle ---
         with gui.sub_window("Debug", 0.26, 0.02, 0.12, 0.14) as g:
-                g.text("=== Debug ===")
+            g.text("=== Debug ===")
+            if show_debug_toggle:
                 if g.button("Debug ON" if not debug_mode else "Debug OFF"):
                     debug_mode = not debug_mode
-                if g.button("Stop GIF" if _recording else "Record GIF"):
-                    if not _recording:
-                        _recording = True
-                        _record_dir = tempfile.mkdtemp(prefix="lab2rec_")
-                        _record_count = 0
-                        _record_frame = 0
-                    else:
-                        _recording = False
-                        if _record_dir:
-                            _save_gif_from_dir(_record_dir)
-                        _record_dir = None
-                        _record_count = 0
-                if _recording:
-                    g.text(f"  REC {_record_count}")
+            if g.button("Stop GIF" if _recording else "Record GIF"):
+                if not _recording:
+                    _recording = True
+                    _record_dir = tempfile.mkdtemp(prefix="lab2rec_")
+                    _record_count = 0
+                    _record_frame = 0
+                else:
+                    _recording = False
+                    if _record_dir:
+                        _save_gif_from_dir(_record_dir)
+                    _record_dir = None
+                    _record_count = 0
+            if _recording:
+                g.text(f"  REC {_record_count}")
 
         # --- GUI: Debug timing ---
         if debug_mode:
@@ -539,26 +596,28 @@ def run_gui(
         ray_dir = pt_on_plane - cam_pos
         ray_dir = ray_dir / (np.linalg.norm(ray_dir) + 1e-8)
 
-        # Obstacle picking: ray-sphere/ray-box with actual visual radius + small margin,
-        # plus screen-space fallback with per-obstacle visual threshold
+        # Obstacle picking: using actual geometry (triangle mesh for box, sphere for sphere)
+        # This ensures picking matches rendering exactly
         obs_count = sim.obstacle_count[None]
         picked_obs = -1
         if obs_count > 0:
             best_t = 1e30
             tan_half_fov = np.tan(fov / 2)
+
             for o in range(min(obs_count, 4)):
                 obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
-                oc = cam_pos - obs_c
 
-                # ---- 3D ray intersection (primary) ----
+                # ---- 3D ray intersection ----
                 if sim.obstacle_type[o] == 0:  # sphere
                     world_r = sim.obstacle_radius[o]
                     if world_r <= 0:
                         continue
-                    pick_r = world_r * 1.3  # actual visual radius + 30% margin
+                    # Use exact visual radius for picking (no margin)
+                    visual_r = world_r * 0.95  # Exact match with rendering
+                    oc = cam_pos - obs_c
                     a = ray_dir.dot(ray_dir)
                     b = 2.0 * oc.dot(ray_dir)
-                    c = oc.dot(oc) - pick_r * pick_r
+                    c = oc.dot(oc) - visual_r * visual_r
                     disc = b * b - 4 * a * c
                     if disc >= 0:
                         t = (-b - np.sqrt(disc)) / (2 * a)
@@ -570,8 +629,8 @@ def run_gui(
                     box_pos_np = obs_c
                     quat_np = np.array([sim.obstacle_rotation[o][0], sim.obstacle_rotation[o][1],
                                         sim.obstacle_rotation[o][2], sim.obstacle_rotation[o][3]])
-                    pick_size = sz + 0.02
-                    t = _ray_box_intersection(cam_pos, ray_dir, box_pos_np, quat_np, pick_size)
+                    # Use triangle mesh intersection (exact match with rendering)
+                    t = _ray_box_intersect_triangles(cam_pos, ray_dir, box_pos_np, quat_np, sz)
                     if t is not None and 0 < t < best_t:
                         best_t = t
                         picked_obs = o
@@ -593,18 +652,21 @@ def run_gui(
                 if hw < 1e-8 or hh < 1e-8:
                     continue
                 sx = (right_dist / hw + 1.0) / 2.0
-                sy = (1.0 + up_dist / hh) / 2.0
+                sy = (1.0 - up_dist / hh) / 2.0
                 dist = np.sqrt((sx - cx) ** 2 + (sy - cy) ** 2)
                 # Obstacle visual radius on screen
                 if sim.obstacle_type[o] == 0:  # sphere
                     world_r = sim.obstacle_radius[o]
                     if world_r <= 0:
                         continue
+                    visual_r = world_r * 0.95  # Match actual rendering radius
                 else:
-                    sz = sim.obstacle_size[o]
-                    world_r = max(sz[0], sz[1], sz[2])
-                screen_r = 0.5 * world_r / hh
-                threshold = max(screen_r * 1.5, 0.015)
+                    # For box, use max dimension for conservative screen radius estimate
+                    sz = np.array([sim.obstacle_size[o][0], sim.obstacle_size[o][1], sim.obstacle_size[o][2]])
+                    visual_r = np.max(sz)  # Box renders with half-size sz
+                screen_r = 0.5 * visual_r / hh
+                # Use moderate threshold - match visual size with small margin
+                threshold = max(screen_r * 1.3, 0.015)  # More precise threshold matching visual size
                 if dist < threshold and depth < best_depth:
                     best_depth = depth
                     picked_obs = o
@@ -613,6 +675,20 @@ def run_gui(
         if lmb and not prev_lmb:
             if picked_obs >= 0:
                 drag_target = picked_obs
+                # Debug: print detailed picking info
+                obs_type_str = "sphere" if sim.obstacle_type[picked_obs] == 0 else "box"
+                obs_pos = sim.obstacle_pos[picked_obs]
+                print(f"[DEBUG] Picked obstacle {picked_obs} ({obs_type_str}) at pos=({obs_pos[0]:.3f}, {obs_pos[1]:.3f}, {obs_pos[2]:.3f}) cursor=({cx:.3f}, {cy:.3f})")
+            else:
+                # Debug: no obstacle picked, print why
+                print(f"[DEBUG] No obstacle picked at cursor ({cx:.3f}, {cy:.3f}), cam_pos=({cam_pos[0]:.3f}, {cam_pos[1]:.3f}, {cam_pos[2]:.3f})")
+                if obs_count > 0:
+                    for o in range(min(obs_count, 4)):
+                        obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                        to_obs = obs_c - cam_pos
+                        depth = to_obs.dot(forward_n)
+                        obs_type_str = "sphere" if sim.obstacle_type[o] == 0 else "box"
+                        print(f"  Obs {o} ({obs_type_str}): pos=({obs_c[0]:.3f}, {obs_c[1]:.3f}, {obs_c[2]:.3f}) depth={depth:.3f}")
         elif not lmb:
             drag_target = -1
 
@@ -720,8 +796,8 @@ def run_gui(
                     gravity=current_gravity,
                 )
             sim_time += current_dt * num_substeps
-            # V-t curve: sample every 2 frames
-            if not paused:
+            # V-t curve: sample every 2 frames (only when debug + show_volume)
+            if show_volume and debug_mode and not paused:
                 _vt_frame_idx += 1
                 if _vt_frame_idx % 2 == 0:
                     sim.compute_fluid_volume()
@@ -808,14 +884,15 @@ def run_gui(
                                    instance_count=box_instance_count)
 
         # V-t curve (volume ratio over time)
-        n_vt = _vt_curve_np.shape[0]
-        if n_vt >= 2:
-            # Pad unused field slots with last valid point to avoid stray lines
-            for i in range(_vt_curve_np.shape[0]):
-                _vt_curve_field[i] = _vt_curve_np[i]
-            for i in range(_vt_curve_np.shape[0], _vt_max_pts):
-                _vt_curve_field[i] = _vt_curve_np[-1]
-            scene.lines(_vt_curve_field, width=2.0, color=(0.2, 1.0, 0.4))
+        if show_volume and debug_mode:
+            n_vt = _vt_curve_np.shape[0]
+            if n_vt >= 2:
+                # Pad unused field slots with last valid point to avoid stray lines
+                for i in range(_vt_curve_np.shape[0]):
+                    _vt_curve_field[i] = _vt_curve_np[i]
+                for i in range(_vt_curve_np.shape[0], _vt_max_pts):
+                    _vt_curve_field[i] = _vt_curve_np[-1]
+                scene.lines(_vt_curve_field, width=2.0, color=(0.2, 1.0, 0.4))
 
         canvas.scene(scene)
         # Capture after scene set but before show() — framebuffer still valid

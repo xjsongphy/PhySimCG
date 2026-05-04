@@ -5,7 +5,7 @@ import importlib
 DEMOS = {
     "basic": "lab2.demos.basic",
     "b1": "lab2.demos.basic",
-    "b2": "lab2.demos.basic",
+    "b2": "lab2.demos.b2",
     "b3": "lab2.demos.b3",
     "b4": "lab2.demos.b4",
     "b5": "lab2.demos.b5",

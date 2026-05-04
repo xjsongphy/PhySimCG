@@ -31,6 +31,8 @@ def run(debug=False):
         show_color=True,
         show_flip=True,
         show_solver=True,
+        show_volume=True,
+        show_debug_toggle=True,
     )
 
 
