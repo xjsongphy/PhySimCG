@@ -2,8 +2,8 @@
 import numpy as np
 import taichi as ti
 
-_EDGE_TABLE = ti.field(int, shape=(256,))
-_TRI_TABLE = ti.field(int, shape=(256, 16))
+_EDGE_TABLE = None
+_TRI_TABLE = None
 
 # Standard MC 256-case triangle table, encoded compactly.
 # Each byte is an edge index (0-11) or 0xFF for terminator.
@@ -286,6 +286,10 @@ _TRI_BYTES_HEX = (
 
 def _init_mc_tables():
     """Initialize Marching Cubes lookup tables from compact hex encoding."""
+    global _EDGE_TABLE, _TRI_TABLE
+    if _EDGE_TABLE is None:
+        _EDGE_TABLE = ti.field(int, shape=(256,))
+        _TRI_TABLE = ti.field(int, shape=(256, 16))
     edge_conn = [
         (0, 1), (1, 2), (2, 3), (3, 0),
         (4, 5), (5, 6), (6, 7), (7, 4),
@@ -305,7 +309,47 @@ def _init_mc_tables():
             _TRI_TABLE[case, i] = b if b != 0xFF else -1
 
 
-def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1):
+@ti.kernel
+def _scatter_density(pos: ti.template(), density: ti.template(),
+                     mc_nx: int, mc_ny: int, mc_nz: int,
+                     mc_dx: float, sigma: float):
+    """GPU kernel: scatter particle density to MC grid."""
+    sigma2 = 2.0 * sigma * sigma
+    r = ti.cast(ti.ceil(3.0 * sigma / mc_dx), int)
+    for p in range(pos.shape[0]):
+        if pos[p][0] < 0:
+            continue
+        px, py, pz = pos[p]
+        ci = ti.cast(px / mc_dx, int)
+        cj = ti.cast(py / mc_dx, int)
+        ck = ti.cast(pz / mc_dx, int)
+        for di in range(-r, r + 1):
+            ni = ci + di
+            if ni < 0 or ni > mc_nx:
+                continue
+            cx = (ni + 0.5) * mc_dx
+            dx2 = (cx - px) * (cx - px)
+            for dj in range(-r, r + 1):
+                nj = cj + dj
+                if nj < 0 or nj > mc_ny:
+                    continue
+                cy = (nj + 0.5) * mc_dx
+                dy2 = (cy - py) * (cy - py)
+                dxy2 = dx2 + dy2
+                if dxy2 > 9.0 * sigma2:
+                    continue
+                for dk in range(-r, r + 1):
+                    nk = ck + dk
+                    if nk < 0 or nk > mc_nz:
+                        continue
+                    cz = (nk + 0.5) * mc_dx
+                    dist2 = dxy2 + (cz - pz) * (cz - pz)
+                    if dist2 < 9.0 * sigma2:
+                        density[ni, nj, nk] += ti.exp(-dist2 / sigma2)
+
+
+def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1,
+                       density_ti=None):
     """Build a triangle mesh from particle positions using Marching Cubes.
 
     Args:
@@ -314,6 +358,9 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1):
         dx: cell size
         threshold: density threshold for isosurface (0-1)
         mc_res: MC grid refinement factor (1 = sim grid, 2 = 2x finer)
+        density_ti: optional pre-allocated Taichi scalar field for GPU scatter.
+                    If provided, density is computed on GPU (much faster).
+                    Shape must be (mc_nx+1, mc_ny+1, mc_nz+1).
 
     Returns:
         (vertices, triangles) as numpy arrays, or (None, None) if empty
@@ -323,45 +370,60 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1):
     mc_nz = nz * mc_res
     mc_dx = dx / mc_res
 
-    pos_np = pos_field.to_numpy().astype(np.float64)
-    active = pos_np[pos_np[:, 0] >= 0]
+    sigma = mc_dx * 2.5
 
-    if len(active) == 0:
-        return None, None
+    if density_ti is not None:
+        density_ti.fill(0.0)
+        _scatter_density(pos_field, density_ti, mc_nx, mc_ny, mc_nz, mc_dx, sigma)
+        density = density_ti.to_numpy().astype(np.float64)
+        if density.max() == 0:
+            return None, None
+    else:
+        pos_np = pos_field.to_numpy().astype(np.float64)
+        active = pos_np[pos_np[:, 0] >= 0]
+        if len(active) == 0:
+            return None, None
 
-    density = np.zeros((mc_nx + 1, mc_ny + 1, mc_nz + 1), dtype=np.float64)
+        density = np.zeros((mc_nx + 1, mc_ny + 1, mc_nz + 1), dtype=np.float64)
+        sigma2 = 2.0 * sigma * sigma
+        r = int(np.ceil(3.0 * sigma / mc_dx))
 
-    sigma = mc_dx * 2.0
-    sigma2 = 2.0 * sigma * sigma
+        for px, py, pz in active:
+            ci = int(px / mc_dx)
+            cj = int(py / mc_dx)
+            ck = int(pz / mc_dx)
+            ci0 = max(0, ci - r)
+            ci1 = min(mc_nx, ci + r)
+            cj0 = max(0, cj - r)
+            cj1 = min(mc_ny, cj + r)
+            ck0 = max(0, ck - r)
+            ck1 = min(mc_nz, ck + r)
 
-    for px, py, pz in active:
-        ci0 = max(0, int((px - 3 * sigma) / mc_dx))
-        cj0 = max(0, int((py - 3 * sigma) / mc_dx))
-        ck0 = max(0, int((pz - 3 * sigma) / mc_dx))
-        ci1 = min(mc_nx, int((px + 3 * sigma) / mc_dx) + 1)
-        cj1 = min(mc_ny, int((py + 3 * sigma) / mc_dx) + 1)
-        ck1 = min(mc_nz, int((pz + 3 * sigma) / mc_dx) + 1)
+            kk = np.arange(ck0, ck1 + 1)
+            cz = (kk + 0.5) * mc_dx
+            dz2 = (cz - pz) ** 2
 
-        for ci in range(ci0, ci1 + 1):
-            cx = (ci + 0.5) * mc_dx
-            dx2 = (cx - px) ** 2
-            for cj in range(cj0, cj1 + 1):
-                cy = (cj + 0.5) * mc_dx
-                dy2 = (cy - py) ** 2
-                for ck in range(ck0, ck1 + 1):
-                    cz = (ck + 0.5) * mc_dx
-                    dist2 = dx2 + dy2 + (cz - pz) ** 2
-                    if dist2 < 9.0 * sigma2:
-                        density[ci, cj, ck] += np.exp(-dist2 / sigma2)
+            for i in range(ci0, ci1 + 1):
+                cx = (i + 0.5) * mc_dx
+                dx2 = (cx - px) ** 2
+                if dx2 > 9.0 * sigma2:
+                    continue
+                for j in range(cj0, cj1 + 1):
+                    cy = (j + 0.5) * mc_dx
+                    dy2 = (cy - py) ** 2
+                    dist2 = dx2 + dy2 + dz2
+                    mask = dist2 < 9.0 * sigma2
+                    if mask.any():
+                        density[i, j, kk[mask]] += np.exp(-dist2[mask] / sigma2)
 
     max_d = density.max()
     if max_d > 0:
         density /= max_d
 
-    corner_offsets = [
-        (0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1),
-        (0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1),
-    ]
+    corner_offsets = np.array([
+        [0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1],
+        [0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1],
+    ], dtype=np.int32)
     edge_verts = [
         (0, 1), (1, 2), (2, 3), (3, 0),
         (4, 5), (5, 6), (6, 7), (7, 4),
@@ -372,51 +434,52 @@ def build_surface_mesh(pos_field, nx, ny, nz, dx, threshold=0.5, mc_res=1):
     tris = []
     vert_map = {}
 
-    for i in range(mc_nx):
-        for j in range(mc_ny):
-            for k in range(mc_nz):
-                vals = [density[i + di, j + dj, k + dk] for di, dj, dk in corner_offsets]
-                case_idx = 0
-                for c in range(8):
-                    if vals[c] >= threshold:
-                        case_idx |= (1 << c)
-                if case_idx == 0 or case_idx == 255:
-                    continue
+    di, dj, dk = density.shape
+    i_idx, j_idx, k_idx = np.nonzero(density[:-1, :-1, :-1] > 0)
+    for idx in range(len(i_idx)):
+        i, j, k = i_idx[idx], j_idx[idx], k_idx[idx]
+        vals = density[i + corner_offsets[:, 0], j + corner_offsets[:, 1], k + corner_offsets[:, 2]]
+        case_idx = 0
+        for c in range(8):
+            if vals[c] >= threshold:
+                case_idx |= (1 << c)
+        if case_idx == 0 or case_idx == 255:
+            continue
 
-                tri_list = []
-                for t in range(16):
-                    e = _TRI_TABLE[case_idx, t]
-                    if e < 0:
-                        break
-                    tri_list.append(e)
+        tri_list = []
+        for t in range(16):
+            e = _TRI_TABLE[case_idx, t]
+            if e < 0:
+                break
+            tri_list.append(e)
 
-                if len(tri_list) < 3:
-                    continue
+        if len(tri_list) < 3:
+            continue
 
-                for e in tri_list:
-                    key = (i, j, k, e)
-                    if key not in vert_map:
-                        e0, e1 = edge_verts[e]
-                        v0, v1 = vals[e0], vals[e1]
-                        if abs(v1 - v0) < 1e-8:
-                            t_param = 0.5
-                        else:
-                            t_param = (threshold - v0) / (v1 - v0)
-                        t_param = max(0.0, min(1.0, t_param))
-                        c0, c1 = corner_offsets[e0], corner_offsets[e1]
-                        vert_map[key] = len(verts)
-                        verts.append([
-                            (i + c0[0] + t_param * (c1[0] - c0[0])) * mc_dx,
-                            (j + c0[1] + t_param * (c1[1] - c0[1])) * mc_dx,
-                            (k + c0[2] + t_param * (c1[2] - c0[2])) * mc_dx,
-                        ])
+        for e in tri_list:
+            key = (i, j, k, e)
+            if key not in vert_map:
+                e0, e1 = edge_verts[e]
+                v0, v1 = vals[e0], vals[e1]
+                if abs(v1 - v0) < 1e-8:
+                    t_param = 0.5
+                else:
+                    t_param = (threshold - v0) / (v1 - v0)
+                t_param = max(0.0, min(1.0, t_param))
+                c0, c1 = corner_offsets[e0], corner_offsets[e1]
+                vert_map[key] = len(verts)
+                verts.append([
+                    (i + c0[0] + t_param * (c1[0] - c0[0])) * mc_dx,
+                    (j + c0[1] + t_param * (c1[1] - c0[1])) * mc_dx,
+                    (k + c0[2] + t_param * (c1[2] - c0[2])) * mc_dx,
+                ])
 
-                for t in range(0, len(tri_list) - 2, 3):
-                    tris.append([
-                        vert_map[(i, j, k, tri_list[t])],
-                        vert_map[(i, j, k, tri_list[t + 1])],
-                        vert_map[(i, j, k, tri_list[t + 2])],
-                    ])
+        for t in range(0, len(tri_list) - 2, 3):
+            tris.append([
+                vert_map[(i, j, k, tri_list[t])],
+                vert_map[(i, j, k, tri_list[t + 1])],
+                vert_map[(i, j, k, tri_list[t + 2])],
+            ])
 
     if len(verts) == 0:
         return None, None
