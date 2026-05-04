@@ -4,6 +4,7 @@ import taichi as ti
 from lab2.core import FluidSimulator, scene_particle_count
 from lab2.flip import FLIPSimulator
 from lab2.apic import APICSimulator
+from lab2.eulerian import EulerianSimulator
 from collections import defaultdict
 
 
@@ -30,18 +31,18 @@ def _get_screen_resolution() -> tuple:
 SCENES = ["Dam Break", "Drop", "Double Dam"]
 OBSTACLES = {
     "None":          [],
-    "1 Sphere":      [("sphere", 0.06, None, (0.5, 0.25, 0.5))],
-    "2 Spheres":     [("sphere", 0.05, None, (0.35, 0.25, 0.35)),
-                      ("sphere", 0.05, None, (0.65, 0.25, 0.65))],
-    "3 Spheres":     [("sphere", 0.045, None, (0.3, 0.25, 0.3)),
-                      ("sphere", 0.045, None, (0.7, 0.25, 0.7)),
-                      ("sphere", 0.045, None, (0.5, 0.25, 0.5))],
-    "1 Big + 1 Small":[("sphere", 0.09, None, (0.5, 0.28, 0.5)),
-                       ("sphere", 0.04, None, (0.7, 0.25, 0.3))],
-    "Stirrer":       [("sphere", 0.08, None, (0.5, 0.25, 0.5))],
-    "1 Box":         [("box", None, (0.08, 0.06, 0.08), (0.5, 0.25, 0.5))],
-    "Sphere + Box":  [("sphere", 0.05, None, (0.35, 0.25, 0.35)),
-                      ("box", None, (0.06, 0.08, 0.06), (0.65, 0.25, 0.65))],
+    "1 Sphere":      [("sphere", 0.06, None, (0.5, 0.07, 0.5))],
+    "2 Spheres":     [("sphere", 0.05, None, (0.35, 0.06, 0.35)),
+                      ("sphere", 0.05, None, (0.65, 0.06, 0.65))],
+    "3 Spheres":     [("sphere", 0.045, None, (0.3, 0.05, 0.3)),
+                      ("sphere", 0.045, None, (0.7, 0.05, 0.7)),
+                      ("sphere", 0.045, None, (0.5, 0.05, 0.5))],
+    "1 Big + 1 Small":[("sphere", 0.09, None, (0.5, 0.10, 0.5)),
+                       ("sphere", 0.04, None, (0.7, 0.05, 0.3))],
+    "Stirrer":       [("sphere", 0.08, None, (0.5, 0.09, 0.5))],
+    "1 Box":         [("box", None, (0.08, 0.06, 0.08), (0.5, 0.07, 0.5))],
+    "Sphere + Box":  [("sphere", 0.05, None, (0.35, 0.06, 0.35)),
+                      ("box", None, (0.06, 0.08, 0.06), (0.65, 0.09, 0.65))],
 }
 
 def _quat_mul(q1, q2):
@@ -214,6 +215,7 @@ def run_gui(
     show_color: bool = True,
     show_flip: bool = True,
     show_solver: bool = True,
+    sim_type: str = "FLIP",  # "FLIP", "APIC", or "Eulerian"
 ):
     if window_size is None:
         screen_w, screen_h = _get_screen_resolution()
@@ -259,7 +261,9 @@ def run_gui(
     current_res_name = "Med (24)"
     obstacle_name = "None"
     use_cg = False
-    sim_method = "FLIP"  # "FLIP" or "APIC"
+    _sim_type = sim_type  # "FLIP", "APIC", or "Eulerian"
+    sim_method = _sim_type if _sim_type != "Eulerian" else "FLIP"
+    move_scale = 1.5
     animate_obstacle = False
     sim_time = 0.0
     shaking = False
@@ -269,6 +273,8 @@ def run_gui(
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
     prev_cursor_valid = False
+    prev_lmb = False
+    drag_target = -1  # sticky obstacle pick — persists while LMB held
 
     # Deferred recreation + debug timers
     _recreate = None
@@ -285,12 +291,23 @@ def run_gui(
         # ==== Deferred simulator recreation ====
         if _recreate is not None:
             t0 = time.perf_counter()
-            scene_name, nx, ny, nz = _recreate
+            scene_name, nx, ny, nz, st = _recreate
             if nz is None:
                 nz = sim.nz
-            current_scene = scene_name
-            sim = _create_sim(scene_name, nx, ny, nz, obstacle_name, sim_method)
-            substep_fn = sim.substep
+            _sim_type = st
+            if st == "Eulerian":
+                current_scene = scene_name
+                sim = EulerianSimulator(nx, ny, nz)
+                sim.init_dam_break_density()
+                sim.init_cell_types()
+                def substep_fn(dt, flip_ratio, gravity, **kw):
+                    sim.substep(dt=dt, gravity=gravity, **kw)
+                    sim.update_render_points()
+            else:
+                current_scene = scene_name
+                sim_method = st
+                sim = _create_sim(scene_name, nx, ny, nz, obstacle_name, sim_method)
+                substep_fn = sim.substep
             dx = sim.dx
             _recreate = None
             if debug_mode:
@@ -304,7 +321,7 @@ def run_gui(
             g.text(f"  Current: {current_scene}")
             for name in SCENES:
                 if g.button(name):
-                    _recreate = (name, sim.nx, sim.ny, sim.nz)
+                    _recreate = (name, sim.nx, sim.ny, sim.nz, _sim_type)
             if g.button("Shake: ON" if shaking else "Shake: OFF"):
                 shaking = not shaking
             shake_strength = g.slider_float("Strength", shake_strength, 0.0, 20.0)
@@ -318,7 +335,7 @@ def run_gui(
                 for name, (nx, ny, nz) in RESOLUTIONS.items():
                     if g.button(name):
                         current_res_name = name
-                        _recreate = (current_scene, nx, ny, nz)
+                        _recreate = (current_scene, nx, ny, nz, _sim_type)
 
         # --- GUI: Controls ---
         with gui.sub_window("Controls", 0.02, 0.32, 0.22, 0.36) as g:
@@ -327,8 +344,11 @@ def run_gui(
             if show_flip:
                 current_flip_ratio = g.slider_float("flipRatio", current_flip_ratio, 0.0, 1.0)
             current_gravity = g.slider_float("gravity", current_gravity, -20.0, 0.0)
+            move_scale = g.slider_float("dragSpeed", move_scale, 0.1, 10.0)
             if g.button("Pause / Resume"):
                 paused = not paused
+            if g.button("Reset Sim"):
+                _recreate = (current_scene, sim.nx, sim.ny, sim.nz, _sim_type)
             if g.button("Reset Camera"):
                 cam_target[:] = _init_cam_target
                 cam_yaw = _init_cam_yaw
@@ -340,11 +360,11 @@ def run_gui(
                 if g.button("Toggle CG/GS"):
                     use_cg = not use_cg
             if show_flip:
-                g.text(f"  Method: {sim_method}")
+                g.text(f"  Method: {_sim_type}")
                 if g.button("Toggle FLIP/APIC"):
-                    new_method = "APIC" if sim_method == "FLIP" else "FLIP"
-                    sim_method = new_method
-                    _recreate = (current_scene, sim.nx, sim.ny, sim.nz)
+                    new_method = "APIC" if _sim_type == "FLIP" else "FLIP"
+                    _sim_type = new_method
+                    _recreate = (current_scene, sim.nx, sim.ny, sim.nz, _sim_type)
 
         # --- GUI: Obstacle ---
         if show_obstacle:
@@ -396,6 +416,7 @@ def run_gui(
             _vol_history.append(sim._fluid_vol_ratio[0])
             if len(_vol_history) > 200:
                 _vol_history.pop(0)
+
             with gui.sub_window("Debug Timing", 0.26, 0.46, 0.14, 0.38) as g:
                 g.text(f"Frame:    {_ms_frame:>6.1f} ms")
                 g.text(f"FPS:      {1000.0 / max(_ms_frame, 0.01):.0f}")
@@ -424,8 +445,8 @@ def run_gui(
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
 
-        # All GUI panels are on the left side — block world interaction there
-        over_gui = (cx < 0.55)
+        # GUI panels occupy x ≤ 0.40; block camera interaction there
+        over_gui = (cx < 0.42)
 
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
@@ -459,7 +480,7 @@ def run_gui(
                     obs_r = sim.obstacle_radius[o]
                     if obs_r <= 0:
                         continue
-                    pick_r = max(obs_r * 2.5, 0.04)
+                    pick_r = max(obs_r * 10.0, 0.12)
                     obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
                     oc = cam_pos - obs_c
                     a = ray_dir.dot(ray_dir)
@@ -476,13 +497,19 @@ def run_gui(
                     box_pos_np = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
                     quat_np = np.array([sim.obstacle_rotation[o][0], sim.obstacle_rotation[o][1],
                                         sim.obstacle_rotation[o][2], sim.obstacle_rotation[o][3]])
-                    pick_size = sz + 0.04
+                    pick_size = sz + 0.08
                     t = _ray_box_intersection(cam_pos, ray_dir, box_pos_np, quat_np, pick_size)
                     if t is not None and 0 < t < best_t:
                         best_t = t
                         picked_obs = o
 
-        # Obstacle interaction (camera-relative)
+        # Obstacle interaction — sticky pick: latch onto obstacle on LMB press, drag until release
+        if lmb and not prev_lmb:
+            if picked_obs >= 0:
+                drag_target = picked_obs
+        elif not lmb:
+            drag_target = -1
+
         dragging_obs = False
         rotating_obs = False
         if prev_cursor_valid:
@@ -494,34 +521,33 @@ def run_gui(
                 dx_mouse = 0.0
                 dy_mouse = 0.0
 
-            move_scale = 1.5
+            if drag_target >= 0:
+                # LMB: drag obstacle in camera plane
+                if lmb:
+                    dragging_obs = True
+                    old = np.array([sim.obstacle_pos[drag_target][0],
+                                   sim.obstacle_pos[drag_target][1],
+                                   sim.obstacle_pos[drag_target][2]])
+                    new = old + right_cam * (-dx_mouse * move_scale) + cam_up * (dy_mouse * move_scale)
+                    new[0] = np.clip(new[0], 0.05, 0.95)
+                    new[1] = np.clip(new[1], 0.05, 0.95)
+                    new[2] = np.clip(new[2], 0.05, 0.95)
+                    sim.obstacle_pos[drag_target] = new
+                    sim.obstacle_vel[drag_target] = (new - old) / (max(current_dt, 1e-6) * 4)
 
-            # LMB: drag obstacle in camera plane
-            if lmb and not over_gui and picked_obs >= 0:
-                dragging_obs = True
-                old = np.array([sim.obstacle_pos[picked_obs][0],
-                               sim.obstacle_pos[picked_obs][1],
-                               sim.obstacle_pos[picked_obs][2]])
-                new = old + right_cam * (dx_mouse * move_scale) + cam_up * (-dy_mouse * move_scale)
-                new[0] = np.clip(new[0], 0.05, 0.95)
-                new[1] = np.clip(new[1], 0.05, 0.95)
-                new[2] = np.clip(new[2], 0.05, 0.95)
-                sim.obstacle_pos[picked_obs] = new
-                sim.obstacle_vel[picked_obs] = (new - old) / (max(current_dt, 1e-6) * 4)
-
-            # RMB: rotate obstacle about camera axes
-            if rmb and not over_gui and picked_obs >= 0:
-                rotating_obs = True
-                rot_speed = 0.005
-                q_current = np.array([sim.obstacle_rotation[picked_obs][0],
-                                     sim.obstacle_rotation[picked_obs][1],
-                                     sim.obstacle_rotation[picked_obs][2],
-                                     sim.obstacle_rotation[picked_obs][3]])
-                dq_up = _quat_angle_axis(dx_mouse * rot_speed, cam_up)
-                dq_right = _quat_angle_axis(dy_mouse * rot_speed, right_cam)
-                delta = _quat_mul(dq_up, dq_right)
-                q_new = _quat_normalize(_quat_mul(delta, q_current))
-                sim.obstacle_rotation[picked_obs] = q_new
+                # RMB: rotate obstacle about camera axes
+                if rmb:
+                    rotating_obs = True
+                    rot_speed = 0.005
+                    q_current = np.array([sim.obstacle_rotation[drag_target][0],
+                                         sim.obstacle_rotation[drag_target][1],
+                                         sim.obstacle_rotation[drag_target][2],
+                                         sim.obstacle_rotation[drag_target][3]])
+                    dq_up = _quat_angle_axis(dx_mouse * rot_speed, cam_up)
+                    dq_right = _quat_angle_axis(dy_mouse * rot_speed, right_cam)
+                    delta = _quat_mul(dq_up, dq_right)
+                    q_new = _quat_normalize(_quat_mul(delta, q_current))
+                    sim.obstacle_rotation[drag_target] = q_new
 
         # Camera controls (only when not interacting with obstacle)
         if prev_cursor_valid and not dragging_obs and not rotating_obs and not over_gui:
@@ -556,15 +582,16 @@ def run_gui(
 
         prev_cursor_x, prev_cursor_y = cx, cy
         prev_cursor_valid = True
+        prev_lmb = lmb
 
         # ==== Animate obstacle ====
         if animate_obstacle and sim.obstacle_count[None] > 0:
             t = sim_time
+            old_pos = np.array([sim.obstacle_pos[0][0], sim.obstacle_pos[0][1], sim.obstacle_pos[0][2]])
             cx = 0.5 + 0.25 * np.sin(t * 2.0)
             cz = 0.5 + 0.25 * np.cos(t * 2.0)
-            cy = 0.5 + 0.1 * np.sin(t * 3.0)
+            cy = old_pos[1]
             new_pos = np.array([cx, cy, cz])
-            old_pos = np.array([sim.obstacle_pos[0][0], sim.obstacle_pos[0][1], sim.obstacle_pos[0][2]])
             vel = (new_pos - old_pos) / max(current_dt, 1e-6)
             sim.obstacle_pos[0] = new_pos
             sim.obstacle_vel[0] = vel
@@ -625,14 +652,15 @@ def run_gui(
         obs_count = sim.obstacle_count[None]
         if obs_count > 0:
             box_instance_count = 0
-            box_transforms.fill(np.eye(4, dtype=np.float32))
+            box_transforms.fill([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+            highlight_obs = drag_target if drag_target >= 0 else picked_obs
             for o in range(min(obs_count, 4)):
                 if sim.obstacle_type[o] == 0:  # sphere
                     obs_r = sim.obstacle_radius[o]
                     if obs_r > 0:
                         obs_pos_field = ti.Vector.field(3, dtype=float, shape=(1,))
                         obs_pos_field[0] = sim.obstacle_pos[o]
-                        color = (0.9, 0.8, 0.2) if o == picked_obs else (0.8, 0.3, 0.3)
+                        color = (0.9, 0.8, 0.2) if o == highlight_obs else (0.8, 0.3, 0.3)
                         scene.particles(obs_pos_field, radius=obs_r * 0.95, color=color)
                 else:  # box
                     pos = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]], dtype=np.float32)
@@ -651,7 +679,7 @@ def run_gui(
                     box_transforms[box_instance_count] = T
                     box_instance_count += 1
             if box_instance_count > 0:
-                color = (0.9, 0.8, 0.2) if picked_obs >= 0 and sim.obstacle_type[picked_obs] == 1 else (0.8, 0.3, 0.3)
+                color = (0.9, 0.8, 0.2) if highlight_obs >= 0 and sim.obstacle_type[highlight_obs] == 1 else (0.8, 0.3, 0.3)
                 scene.mesh_instance(box_mesh_verts, box_mesh_indices,
                                    transforms=box_transforms,
                                    color=color, two_sided=True,
