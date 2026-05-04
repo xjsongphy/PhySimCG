@@ -347,24 +347,57 @@ class FluidSimulator:
     def mark_obstacle_cells(self):
         dx = self.dx
         for o in ti.static(range(self._max_obstacles)):
-            if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
+            if o < self.obstacle_count[None]:
                 obs_pos = self.obstacle_pos[o]
-                obs_r = self.obstacle_radius[o]
-                r2 = (obs_r + dx) ** 2
-                # Only iterate over bounding box around obstacle
-                i0 = ti.max(0, int((obs_pos[0] - obs_r - dx) / dx))
-                i1 = ti.min(self.nx - 1, int((obs_pos[0] + obs_r + dx) / dx) + 1)
-                j0 = ti.max(0, int((obs_pos[1] - obs_r - dx) / dx))
-                j1 = ti.min(self.ny - 1, int((obs_pos[1] + obs_r + dx) / dx) + 1)
-                k0 = ti.max(0, int((obs_pos[2] - obs_r - dx) / dx))
-                k1 = ti.min(self.nz - 1, int((obs_pos[2] + obs_r + dx) / dx) + 1)
-                for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
-                    cx = (i + 0.5) * dx
-                    cy = (j + 0.5) * dx
-                    cz = (k + 0.5) * dx
-                    dist2 = (cx - obs_pos[0]) ** 2 + (cy - obs_pos[1]) ** 2 + (cz - obs_pos[2]) ** 2
-                    if dist2 < r2:
-                        self.cell_type[i, j, k] = 2
+                if self.obstacle_type[o] == 0:  # sphere
+                    obs_r = self.obstacle_radius[o]
+                    if obs_r <= 0:
+                        continue
+                    r2 = (obs_r + dx) ** 2
+                    i0 = ti.max(0, int((obs_pos[0] - obs_r - dx) / dx))
+                    i1 = ti.min(self.nx - 1, int((obs_pos[0] + obs_r + dx) / dx) + 1)
+                    j0 = ti.max(0, int((obs_pos[1] - obs_r - dx) / dx))
+                    j1 = ti.min(self.ny - 1, int((obs_pos[1] + obs_r + dx) / dx) + 1)
+                    k0 = ti.max(0, int((obs_pos[2] - obs_r - dx) / dx))
+                    k1 = ti.min(self.nz - 1, int((obs_pos[2] + obs_r + dx) / dx) + 1)
+                    for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
+                        cx = (i + 0.5) * dx
+                        cy = (j + 0.5) * dx
+                        cz = (k + 0.5) * dx
+                        dist2 = (cx - obs_pos[0])**2 + (cy - obs_pos[1])**2 + (cz - obs_pos[2])**2
+                        if dist2 < r2:
+                            self.cell_type[i, j, k] = 2
+                else:  # box
+                    sz = self.obstacle_size[o]
+                    half_x, half_y, half_z = sz[0] + dx, sz[1] + dx, sz[2] + dx
+                    qw = self.obstacle_rotation[o][0]
+                    qx = self.obstacle_rotation[o][1]
+                    qy = self.obstacle_rotation[o][2]
+                    qz = self.obstacle_rotation[o][3]
+                    cqw, cqx, cqy, cqz = qw, -qx, -qy, -qz
+                    bound = ti.sqrt(half_x*half_x + half_y*half_y + half_z*half_z)
+                    i0 = ti.max(0, int((obs_pos[0] - bound) / dx))
+                    i1 = ti.min(self.nx - 1, int((obs_pos[0] + bound) / dx) + 1)
+                    j0 = ti.max(0, int((obs_pos[1] - bound) / dx))
+                    j1 = ti.min(self.ny - 1, int((obs_pos[1] + bound) / dx) + 1)
+                    k0 = ti.max(0, int((obs_pos[2] - bound) / dx))
+                    k1 = ti.min(self.nz - 1, int((obs_pos[2] + bound) / dx) + 1)
+                    for i, j, k in ti.ndrange((i0, i1 + 1), (j0, j1 + 1), (k0, k1 + 1)):
+                        cx = (i + 0.5) * dx
+                        cy = (j + 0.5) * dx
+                        cz = (k + 0.5) * dx
+                        lx = cx - obs_pos[0]
+                        ly = cy - obs_pos[1]
+                        lz = cz - obs_pos[2]
+                        tw = -cqx*lx - cqy*ly - cqz*lz
+                        tx = cqw*lx + cqy*lz - cqz*ly
+                        ty = cqw*ly - cqx*lz + cqz*lx
+                        tz = cqw*lz + cqx*ly - cqy*lx
+                        rx = tw*qx + tx*qw + ty*qz - tz*qy
+                        ry = tw*qy - tx*qz + ty*qw + tz*qx
+                        rz = tw*qz + tx*qy - ty*qx + tz*qw
+                        if ti.abs(rx) < half_x and ti.abs(ry) < half_y and ti.abs(rz) < half_z:
+                            self.cell_type[i, j, k] = 2
 
     @ti.kernel
     def clear_obstacle_cells(self):
