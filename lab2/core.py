@@ -574,7 +574,8 @@ class FluidSimulator:
                     self.particle_density[i, j, k]
                     - self._target_density[None]
                 )
-                div -= density_diff * 0.008
+                if density_diff > 0.0:
+                    div -= density_diff * 0.5
 
             correction = over_relaxation * div / s
 
@@ -651,7 +652,8 @@ class FluidSimulator:
                     self.particle_density[i, j, k]
                     - self._target_density[None]
                 )
-                div -= density_diff * 0.008
+                if density_diff > 0.0:
+                    div -= density_diff * 0.5
             self._cg_r[i, j, k] = div
 
     @ti.kernel
@@ -847,12 +849,11 @@ class FluidSimulator:
 
     @ti.kernel
     def clamp_all_positions(self):
-        """Force all particles into the domain. Rescue stuck particles."""
+        """Clamp active particles into the domain. Skip truly inactive ones (x << 0)."""
         eps = 1e-6
         for i in range(self.num_particles):
-            if self.pos[i][0] < 0:
-                # Rescue stuck particles - move them to a safe position below the domain
-                self.pos[i] = [0.5, -10.0, 0.5]
+            if self.pos[i][0] < -1.0:
+                continue
             for d in ti.static(range(3)):
                 if self.pos[i][d] < eps:
                     self.pos[i][d] = eps

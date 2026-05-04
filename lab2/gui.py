@@ -131,11 +131,16 @@ def run_gui(
     sim.save_init_volume()
 
     # Camera state
-    cam_target = np.array([0.5, 0.4, 0.5], dtype=np.float32)
-    cam_yaw = -1.57
-    cam_pitch = 0.45
-    cam_dist = 1.8
-    cam_pos = np.array([0.5, 1.0, 2.2], dtype=np.float32)
+    _init_cam_target = np.array([0.5, 0.4, 0.5], dtype=np.float32)
+    _init_cam_yaw = -1.57
+    _init_cam_pitch = 0.45
+    _init_cam_dist = 1.8
+    _init_cam_pos = np.array([0.5, 1.0, 2.2], dtype=np.float32)
+    cam_target = _init_cam_target.copy()
+    cam_yaw = _init_cam_yaw
+    cam_pitch = _init_cam_pitch
+    cam_dist = _init_cam_dist
+    cam_pos = _init_cam_pos.copy()
 
     # Container box
     dx = sim.dx
@@ -157,6 +162,7 @@ def run_gui(
     animate_obstacle = False
     sim_time = 0.0
     shaking = False
+    shake_strength = 5.0
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -167,6 +173,7 @@ def run_gui(
     debug_mode = debug
     _prof_frame = 0
     _ms_frame = 0.0
+    t_frame = time.perf_counter()
     _vol_history = []
 
     while window.running:
@@ -196,8 +203,9 @@ def run_gui(
             for name in SCENES:
                 if g.button(name):
                     _recreate = (name, sim.nx, sim.ny, sim.nz)
-            if g.button("Shake ON" if not shaking else "Shake OFF"):
+            if g.button("Shake: ON" if shaking else "Shake: OFF"):
                 shaking = not shaking
+            shake_strength = g.slider_float("Shake", shake_strength, 0.0, 30.0)
 
         # --- GUI: Resolution ---
         if show_resolution:
@@ -218,6 +226,12 @@ def run_gui(
             current_gravity = g.slider_float("gravity", current_gravity, -20.0, 0.0)
             if g.button("Pause / Resume"):
                 paused = not paused
+            if g.button("Reset Camera"):
+                cam_target[:] = _init_cam_target
+                cam_yaw = _init_cam_yaw
+                cam_pitch = _init_cam_pitch
+                cam_dist = _init_cam_dist
+                cam_pos[:] = _init_cam_pos
             if show_solver:
                 g.text(f"  Solver: {'CG' if use_cg else 'GS'}")
                 if g.button("Toggle CG/GS"):
@@ -427,23 +441,20 @@ def run_gui(
         if debug_mode:
             t_sim = time.perf_counter()
         if not paused:
-            # Container shake: sinusoidal horizontal impulse
-            if shaking:
-                freq = 1.2
-                amp = 20.0
-                gx = amp * np.sin(sim_time * freq * 2 * np.pi)
-                gz = amp * np.cos(sim_time * freq * 2 * np.pi) * 0.7
-                sim.apply_horizontal_impulse(gx * current_dt, gz * current_dt)
-
             if sim.obstacle_count[None] > 0:
                 sim.mark_obstacle_cells()
             for _ in range(num_substeps):
+                if shaking:
+                    freq = 1.2
+                    gx = shake_strength * np.sin(sim_time * freq * 2 * np.pi)
+                    gz = shake_strength * np.cos(sim_time * freq * 2 * np.pi) * 0.7
+                    sim.apply_horizontal_impulse(gx * current_dt, gz * current_dt)
                 substep_fn(
                     dt=current_dt,
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
                 )
-            sim_time += current_dt * num_substeps
+                sim_time += current_dt
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 
