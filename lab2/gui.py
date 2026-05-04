@@ -245,6 +245,10 @@ def run_gui(
     box_field = ti.Vector.field(3, dtype=float, shape=box_pts.shape[0])
     box_field.from_numpy(box_pts)
 
+    # Box mesh geometry
+    box_mesh_verts, box_mesh_indices = _build_box_geometry()
+    box_transforms = ti.Matrix.field(4, 4, dtype=float, shape=(4,))
+
     # State
     paused = False
     current_dt = dt
@@ -620,20 +624,38 @@ def run_gui(
         # Obstacles
         obs_count = sim.obstacle_count[None]
         if obs_count > 0:
+            box_instance_count = 0
+            box_transforms.fill(np.eye(4, dtype=np.float32))
             for o in range(min(obs_count, 4)):
-                obs_r = sim.obstacle_radius[o]
-                if obs_r > 0:
-                    obs_pos_field = ti.Vector.field(3, dtype=float, shape=(1,))
-                    obs_pos_field[0] = sim.obstacle_pos[o]
-                    if o == picked_obs:
-                        color = (0.9, 0.8, 0.2)  # yellow = hovered
-                    else:
-                        color = (0.8, 0.3, 0.3)  # red = normal
-                    scene.particles(
-                        obs_pos_field,
-                        radius=obs_r * 0.95,
-                        color=color,
-                    )
+                if sim.obstacle_type[o] == 0:  # sphere
+                    obs_r = sim.obstacle_radius[o]
+                    if obs_r > 0:
+                        obs_pos_field = ti.Vector.field(3, dtype=float, shape=(1,))
+                        obs_pos_field[0] = sim.obstacle_pos[o]
+                        color = (0.9, 0.8, 0.2) if o == picked_obs else (0.8, 0.3, 0.3)
+                        scene.particles(obs_pos_field, radius=obs_r * 0.95, color=color)
+                else:  # box
+                    pos = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]], dtype=np.float32)
+                    q = np.array([sim.obstacle_rotation[o][0], sim.obstacle_rotation[o][1],
+                                 sim.obstacle_rotation[o][2], sim.obstacle_rotation[o][3]], dtype=np.float32)
+                    s = np.array([sim.obstacle_size[o][0], sim.obstacle_size[o][1], sim.obstacle_size[o][2]], dtype=np.float32)
+                    R = _quat_to_matrix(q)
+                    T = np.eye(4, dtype=np.float32)
+                    T[0, 0] = s[0] * 2
+                    T[1, 1] = s[1] * 2
+                    T[2, 2] = s[2] * 2
+                    T[:3, :3] = R @ T[:3, :3]
+                    T[0, 3] = pos[0]
+                    T[1, 3] = pos[1]
+                    T[2, 3] = pos[2]
+                    box_transforms[box_instance_count] = T
+                    box_instance_count += 1
+            if box_instance_count > 0:
+                color = (0.9, 0.8, 0.2) if picked_obs >= 0 and sim.obstacle_type[picked_obs] == 1 else (0.8, 0.3, 0.3)
+                scene.mesh_instance(box_mesh_verts, box_mesh_indices,
+                                   transforms=box_transforms,
+                                   color=color, two_sided=True,
+                                   instance_count=box_instance_count)
 
         canvas.scene(scene)
         window.show()
