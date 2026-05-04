@@ -41,6 +41,7 @@ class EulerianSimulator(FluidSimulator):
     ):
         self.advect_velocity(dt)
         self.apply_gravity(dt, gravity)
+        self.set_boundary_velocity()
         self.relabel_cells()
         self.solve_incompressibility(num_pressure_iters, dt, over_relaxation, False)
         self.set_boundary_velocity()
