@@ -8,12 +8,8 @@ from lab2.core import FluidSimulator
 class EulerianSimulator(FluidSimulator):
     """Pure grid-based Eulerian fluid simulator.
 
-    Supports two advection modes for density:
-      - Standard semi-Lagrangian (SL)
-      - Advection-Reflection (AR) — reduces numerical diffusion
-
-    Velocity is always advected via standard semi-Lagrangian.
-    No particles — velocity and density live on the grid.
+    Uses density-weighted gravity and semi-Lagrangian advection
+    for velocity and density fields on a MAC grid.
     """
 
     def __init__(self, nx: int, ny: int, nz: int):
@@ -26,32 +22,29 @@ class EulerianSimulator(FluidSimulator):
         self._d_tmp2 = ti.field(dtype=float, shape=(nx, ny, nz))
 
         self._render_density = ti.field(dtype=float, shape=num_particles)
-        self.use_ar = True
+        self.use_ar = False
 
     def substep(
         self,
         dt: float,
         flip_ratio: float = 0.0,
         gravity: float = -9.8,
-        num_pressure_iters: int = 40,
+        num_pressure_iters: int = 80,
         num_particle_iters: int = 0,
         over_relaxation: float = 1.9,
         compensate_drift: bool = False,
         separate_particles: bool = False,
     ):
         self.advect_velocity(dt)
-        self.apply_gravity(dt, gravity)
+        self.apply_gravity_density(dt, gravity)
         self.set_boundary_velocity()
-        self.relabel_cells()
         self.solve_incompressibility(num_pressure_iters, dt, over_relaxation, False)
         self.set_boundary_velocity()
-        if self.use_ar:
-            self._advect_density_ar(dt)
-        else:
-            self.advect_density_sl(dt)
+        self.advect_density_sl(dt)
+        self._rescale_density()
         self.density.copy_from(self.density_new)
 
-    # ── Velocity advection (standard semi-Lagrangian) ──
+    # ── Velocity advection ──
 
     @ti.kernel
     def advect_velocity(self, dt: float):
@@ -61,32 +54,48 @@ class EulerianSimulator(FluidSimulator):
             y = (j + 0.5) * dx
             z = (k + 0.5) * dx
             vel = self._interp_vel_self(x, y, z, dx)
-            self.grid_u[i, j, k] = self._interp_u(x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx)
-
+            self.grid_u[i, j, k] = self._interp_u(
+                x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx
+            )
         for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
             x = (i + 0.5) * dx
             y = j * dx
             z = (k + 0.5) * dx
             vel = self._interp_vel_self(x, y, z, dx)
-            self.grid_v[i, j, k] = self._interp_v(x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx)
-
+            self.grid_v[i, j, k] = self._interp_v(
+                x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx
+            )
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz + 1):
             x = (i + 0.5) * dx
             y = (j + 0.5) * dx
             z = k * dx
             vel = self._interp_vel_self(x, y, z, dx)
-            self.grid_w[i, j, k] = self._interp_w(x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx)
+            self.grid_w[i, j, k] = self._interp_w(
+                x - dt * vel[0], y - dt * vel[1], z - dt * vel[2], dx
+            )
 
     @ti.kernel
-    def apply_gravity(self, dt: float, gravity: float):
+    def apply_gravity_density(self, dt: float, gravity: float):
+        """Apply gravity weighted by density. Only fluid cells get gravity."""
         for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
-            self.grid_v[i, j, k] += gravity * dt
+            # Average density at v-face (between cells j-1 and j)
+            d = 0.0
+            count = 0
+            if j > 0:
+                d += self.density[i, j - 1, k]
+                count += 1
+            if j < self.ny:
+                d += self.density[i, j, k]
+                count += 1
+            if count > 0:
+                d /= count
+            if d > 0.01:
+                self.grid_v[i, j, k] += gravity * dt
 
     # ── Density advection ──
 
     @ti.kernel
     def advect_density_sl(self, dt: float):
-        """Standard semi-Lagrangian density advection (backward trace)."""
         dx = self.dx
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             cx = (i + 0.5) * dx
@@ -97,52 +106,73 @@ class EulerianSimulator(FluidSimulator):
                 cx - dt * vel[0], cy - dt * vel[1], cz - dt * vel[2], dx
             )
 
-    def _advect_density_ar(self, dt: float):
-        """Advection-Reflection density advection.
-
-        AR (Zehnder et al.) reduces numerical diffusion by:
-          1. Standard backward advection:  d_back = SL(d, dt)
-          2. Forward advection of result:   d_fwd = SL(d_back, -dt)
-          3. Reflect the lost details:      d_new = d_back + (d - d_fwd)
-        """
-        self._advect_density_backward(self.density, self.density_new, dt)
-        self._advect_density_forward(self.density_new, self._d_tmp1, dt)
-        self._reflect_density(self.density, self.density_new, self._d_tmp1, self._d_tmp2)
-        self.density_new.copy_from(self._d_tmp2)
-
     @ti.kernel
-    def _advect_density_backward(self, src: ti.template(), dst: ti.template(), dt: float):
+    def advect_density_flux(self, dt: float):
+        """Conservative upwind flux-based density advection (mass-preserving)."""
         dx = self.dx
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            cx = (i + 0.5) * dx
-            cy = (j + 0.5) * dx
-            cz = (k + 0.5) * dx
-            vel = self._interp_vel_self(cx, cy, cz, dx)
-            dst[i, j, k] = self._interp_field(src, cx - dt * vel[0], cy - dt * vel[1], cz - dt * vel[2])
+            d = self.density[i, j, k]
+
+            flux = 0.0
+
+            # X-direction faces
+            u_right = self.grid_u[i + 1, j, k]
+            u_left = self.grid_u[i, j, k]
+            if u_right > 0.0:
+                flux -= d * u_right * dt / dx
+            elif i < self.nx - 1:
+                flux -= self.density[i + 1, j, k] * u_right * dt / dx
+            if u_left > 0.0:
+                if i > 0:
+                    flux += self.density[i - 1, j, k] * u_left * dt / dx
+            else:
+                flux += d * u_left * dt / dx
+
+            # Y-direction faces
+            v_top = self.grid_v[i, j + 1, k]
+            v_bot = self.grid_v[i, j, k]
+            if v_top > 0.0:
+                flux -= d * v_top * dt / dx
+            elif j < self.ny - 1:
+                flux -= self.density[i, j + 1, k] * v_top * dt / dx
+            if v_bot > 0.0:
+                if j > 0:
+                    flux += self.density[i, j - 1, k] * v_bot * dt / dx
+            else:
+                flux += d * v_bot * dt / dx
+
+            # Z-direction faces
+            w_front = self.grid_w[i, j, k + 1]
+            w_back = self.grid_w[i, j, k]
+            if w_front > 0.0:
+                flux -= d * w_front * dt / dx
+            elif k < self.nz - 1:
+                flux -= self.density[i, j, k + 1] * w_front * dt / dx
+            if w_back > 0.0:
+                if k > 0:
+                    flux += self.density[i, j, k - 1] * w_back * dt / dx
+            else:
+                flux += d * w_back * dt / dx
+
+            self.density_new[i, j, k] = d + flux
+            if self.density_new[i, j, k] < 0.0:
+                self.density_new[i, j, k] = 0.0
+            if self.density_new[i, j, k] > 1.0:
+                self.density_new[i, j, k] = 1.0
 
     @ti.kernel
-    def _advect_density_forward(self, src: ti.template(), dst: ti.template(), dt: float):
-        """Forward advection: trace from departure point forward to arrival."""
-        dx = self.dx
+    def _rescale_density(self):
+        """Global mass conservation: rescale density_new to match density total mass."""
+        total_old = 0.0
+        total_new = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            cx = (i + 0.5) * dx
-            cy = (j + 0.5) * dx
-            cz = (k + 0.5) * dx
-            vel = self._interp_vel_self(cx, cy, cz, dx)
-            dst[i, j, k] = self._interp_field(src, cx + dt * vel[0], cy + dt * vel[1], cz + dt * vel[2])
+            total_old += self.density[i, j, k]
+            total_new += self.density_new[i, j, k]
 
-    @ti.kernel
-    def _reflect_density(self, d_orig: ti.template(), d_back: ti.template(),
-                         d_fwd: ti.template(), d_out: ti.template()):
-        """AR reflection: d_out = d_back + (d_orig - d_fwd), clamped to [0, 1]."""
-        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
-            correction = d_orig[i, j, k] - d_fwd[i, j, k]
-            result = d_back[i, j, k] + correction
-            if result < 0.0:
-                result = 0.0
-            if result > 1.0:
-                result = 1.0
-            d_out[i, j, k] = result
+        if total_new > 1e-6:
+            scale = total_old / total_new
+            for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
+                self.density_new[i, j, k] *= scale
 
     # ── Interpolation ──
 
@@ -172,7 +202,6 @@ class EulerianSimulator(FluidSimulator):
 
     @ti.func
     def _interp_field(self, field, gx, gy, gz) -> float:
-        """Interpolate a cell-centered field at fractional grid coordinates."""
         i0 = ti.floor(gx, int)
         j0 = ti.floor(gy, int)
         k0 = ti.floor(gz, int)
@@ -208,10 +237,12 @@ class EulerianSimulator(FluidSimulator):
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             self.density[i, j, k] = 0.0
             self.density_new[i, j, k] = 0.0
+        for i, j, k in ti.ndrange(self.nx + 1, self.ny, self.nz):
             self.grid_u[i, j, k] = 0.0
-            self.grid_w[i, j, k] = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny + 1, self.nz):
             self.grid_v[i, j, k] = 0.0
+        for i, j, k in ti.ndrange(self.nx, self.ny, self.nz + 1):
+            self.grid_w[i, j, k] = 0.0
         for i, j, k in ti.ndrange(self.nx, self.ny, self.nz):
             if i < self.nx // 2 and j < self.ny // 2 and k < self.nz // 2:
                 self.density[i, j, k] = 1.0
