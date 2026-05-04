@@ -169,6 +169,34 @@ def _make_box_edges(lo, hi, n=30):
     return np.array(pts, dtype=np.float32)
 
 
+def _ray_box_intersection(ray_origin, ray_dir, box_pos, box_quat, half_size):
+    """Return min t > 0 if ray hits OBB, else None.
+    Transforms ray to box local space, then does slab-test AABB."""
+    q_inv = np.array([box_quat[0], -box_quat[1], -box_quat[2], -box_quat[3]])
+    local_org = np.array(ray_origin) - np.array(box_pos)
+    lo = np.array([local_org[0], local_org[1], local_org[2], 0.0])
+    lo_rot = _quat_mul(_quat_mul(q_inv, lo), box_quat)
+    local_origin = np.array([lo_rot[1], lo_rot[2], lo_rot[3]])
+    ld = np.array([ray_dir[0], ray_dir[1], ray_dir[2], 0.0])
+    ld_rot = _quat_mul(_quat_mul(q_inv, ld), box_quat)
+    local_dir = np.array([ld_rot[1], ld_rot[2], ld_rot[3]])
+    hs = np.array(half_size)
+    tmin, tmax = -1e30, 1e30
+    for d in range(3):
+        if abs(local_dir[d]) > 1e-12:
+            inv_d = 1.0 / local_dir[d]
+            t1 = (-hs[d] - local_origin[d]) * inv_d
+            t2 = ( hs[d] - local_origin[d]) * inv_d
+            tmin = max(tmin, min(t1, t2))
+            tmax = min(tmax, max(t1, t2))
+        else:
+            if local_origin[d] < -hs[d] or local_origin[d] > hs[d]:
+                return None
+    if tmin > tmax or tmax < 0:
+        return None
+    return max(tmin, 0.0)
+
+
 def run_gui(
     sim: FluidSimulator,
     substep_fn,
@@ -417,36 +445,46 @@ def run_gui(
         ray_dir = pt_on_plane - cam_pos
         ray_dir = ray_dir / (np.linalg.norm(ray_dir) + 1e-8)
 
-        # Ray-sphere intersection for obstacle picking
+        # Ray-sphere / ray-box intersection for obstacle picking
         obs_count = sim.obstacle_count[None]
         picked_obs = -1
         if obs_count > 0:
             best_t = 1e30
             for o in range(min(obs_count, 4)):
-                obs_r = sim.obstacle_radius[o]
-                if obs_r <= 0:
-                    continue
-                pick_r = max(obs_r * 2.5, 0.04)
-                obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
-                oc = cam_pos - obs_c
-                a = ray_dir.dot(ray_dir)
-                b = 2.0 * oc.dot(ray_dir)
-                c = oc.dot(oc) - pick_r * pick_r
-                disc = b * b - 4 * a * c
-                if disc >= 0:
-                    t = (-b - np.sqrt(disc)) / (2 * a)
-                    if 0 < t < best_t:
+                if sim.obstacle_type[o] == 0:  # sphere
+                    obs_r = sim.obstacle_radius[o]
+                    if obs_r <= 0:
+                        continue
+                    pick_r = max(obs_r * 2.5, 0.04)
+                    obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                    oc = cam_pos - obs_c
+                    a = ray_dir.dot(ray_dir)
+                    b = 2.0 * oc.dot(ray_dir)
+                    c = oc.dot(oc) - pick_r * pick_r
+                    disc = b * b - 4 * a * c
+                    if disc >= 0:
+                        t = (-b - np.sqrt(disc)) / (2 * a)
+                        if 0 < t < best_t:
+                            best_t = t
+                            picked_obs = o
+                else:  # box
+                    sz = np.array([sim.obstacle_size[o][0], sim.obstacle_size[o][1], sim.obstacle_size[o][2]])
+                    box_pos_np = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                    quat_np = np.array([sim.obstacle_rotation[o][0], sim.obstacle_rotation[o][1],
+                                        sim.obstacle_rotation[o][2], sim.obstacle_rotation[o][3]])
+                    pick_size = sz + 0.04
+                    t = _ray_box_intersection(cam_pos, ray_dir, box_pos_np, quat_np, pick_size)
+                    if t is not None and 0 < t < best_t:
                         best_t = t
                         picked_obs = o
 
-        # Obstacle dragging (camera-relative)
+        # Obstacle interaction (camera-relative)
         dragging_obs = False
-        moving_obs_vert = False
+        rotating_obs = False
         if prev_cursor_valid:
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
 
-            # Dead zone: ignore tiny movements from click jitter
             mouse_moved = abs(dx_mouse) > 0.002 or abs(dy_mouse) > 0.002
             if not mouse_moved:
                 dx_mouse = 0.0
@@ -467,16 +505,22 @@ def run_gui(
                 sim.obstacle_pos[picked_obs] = new
                 sim.obstacle_vel[picked_obs] = (new - old) / (max(current_dt, 1e-6) * 4)
 
-            # RMB: move obstacle up/down (world Y)
+            # RMB: rotate obstacle about camera axes
             if rmb and not over_gui and picked_obs >= 0:
-                moving_obs_vert = True
-                old_y = sim.obstacle_pos[picked_obs][1]
-                new_y = np.clip(old_y - dy_mouse * move_scale, 0.05, 0.95)
-                sim.obstacle_pos[picked_obs][1] = new_y
-                sim.obstacle_vel[picked_obs][1] = (new_y - old_y) / (max(current_dt, 1e-6) * 4)
+                rotating_obs = True
+                rot_speed = 0.005
+                q_current = np.array([sim.obstacle_rotation[picked_obs][0],
+                                     sim.obstacle_rotation[picked_obs][1],
+                                     sim.obstacle_rotation[picked_obs][2],
+                                     sim.obstacle_rotation[picked_obs][3]])
+                dq_up = _quat_angle_axis(dx_mouse * rot_speed, cam_up)
+                dq_right = _quat_angle_axis(dy_mouse * rot_speed, right_cam)
+                delta = _quat_mul(dq_up, dq_right)
+                q_new = _quat_normalize(_quat_mul(delta, q_current))
+                sim.obstacle_rotation[picked_obs] = q_new
 
         # Camera controls (only when not interacting with obstacle)
-        if prev_cursor_valid and not dragging_obs and not moving_obs_vert and not over_gui:
+        if prev_cursor_valid and not dragging_obs and not rotating_obs and not over_gui:
             if rmb:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
