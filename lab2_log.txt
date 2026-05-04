@@ -1,0 +1,890 @@
+commit de147c24be1a0cce353a783172e86236ec9ad2ce
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 23:06:36 2026 +0800
+
+    docs: update B3 Eulerian section to describe implementation only
+    
+    Update B3 section to focus on implementation details without
+    mentioning actual effects or comparisons:
+    
+    - Remove comparison with FLIP regarding visual quality
+    - Remove statements about "detail loss" or performance
+    - Add note about numerical stability issues in demo section
+    - Keep Semi-Lagrangian advection implementation details
+    
+    B3 demo has bugs and is not guaranteed to work correctly.
+    This section documents the code implementation without
+    claiming any results.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/demos/b3.py |   2 +-
+ lab2/eulerian.py | 159 +++++++++++++++++++++++++++++++++----------------------
+ report.md        |  16 ++++--
+ 3 files changed, 107 insertions(+), 70 deletions(-)
+
+commit 837c60f5d99ca45f63980cd73ee8625b7d3790a8
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 22:39:42 2026 +0800
+
+    docs: simplify report and fix eulerian boundary velocity
+    
+    Simplify report.md:
+    - Remove author header line
+    - Condense CG/APIC analysis to key points
+    - Remove detailed 6.1 performance breakdown
+    - Keep core observation: CG/APIC make fluid "silky smooth"
+      but FPS has no significant difference
+    - Streamline demo descriptions
+    
+    Fix eulerian.py:
+    - Add missing set_boundary_velocity() call before
+      pressure solve for correct boundary conditions
+    
+    Add Manually_Moving_Obstacle.gif to demos.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/demos/gif/Manually_Moving_Obstacle.gif | Bin 0 -> 5307666 bytes
+ lab2/eulerian.py                            |   1 +
+ report.md                                   |  47 ++--------------------------
+ 3 files changed, 4 insertions(+), 44 deletions(-)
+
+commit e5d991a172110b533116cae90e6008756dcd0372
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 22:36:57 2026 +0800
+
+    docs: update report with GIF demos and CG/APIC analysis
+    
+    Add comprehensive demo showcase section with all GIF files:
+    - Dam Break (speed/density colored)
+    - Double Dam scene
+    - CG solver comparison
+    - APIC vs FLIP comparison
+    - Surface reconstruction
+    - Obstacle interaction (moving and manual)
+    - Shake effect
+    
+    Key observations added:
+    - CG and APIC make fluid motion more "silky smooth"
+    - No significant FPS difference between GS/CG/FLIP/APIC
+    - CG converges in fewer iterations but higher cost per iteration
+    - APIC preserves angular momentum and reduces clumping
+    
+    Update obstacle picking section to reflect triangle mesh
+    intersection method (Möller-Trumbore) instead of analytical
+    OBB method, ensuring exact match with rendering.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ report.md | 114 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 108 insertions(+), 6 deletions(-)
+
+commit 991015500b779729a07bc1c27a8383d0c2a313d8
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 22:33:28 2026 +0800
+
+    fix: use triangle mesh for accurate obstacle picking
+    
+    Replace analytical ray-box intersection with Möller-Trumbore
+    ray-triangle intersection to match rendering exactly.
+    
+    Changes:
+    - Add Möller-Trumbore ray-triangle intersection algorithm
+    - Use actual triangle mesh for box picking (12 triangles)
+    - Remove old analytical ray-box intersection function
+    - Match sphere picking radius exactly with rendering (0.95x)
+    - Add b2.py demo with CG solver toggle enabled
+    
+    This fixes the issue where clicking on obstacles would select
+    the wrong one due to mismatch between picking and rendering
+    coordinate systems.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ .DS_Store                                          | Bin 0 -> 8196 bytes
+ imgui.ini                                          |  28 +--
+ lab2-Flip.md                                       | 242 ++++++++++-----------
+ lab2/__main__.py                                   |   2 +-
+ lab2/demos/b2.py                                   |  38 ++++
+ lab2/demos/b3.py                                   |   4 +-
+ lab2/demos/b4.py                                   |   2 +
+ lab2/demos/gif/APIC.gif                            | Bin 0 -> 16327914 bytes
+ lab2/demos/gif/CG.gif                              | Bin 0 -> 24231790 bytes
+ lab2/demos/gif/Moving_Obstacle.gif                 | Bin 0 -> 22681012 bytes
+ lab2/demos/gif/Shake.gif                           | Bin 0 -> 27319321 bytes
+ lab2/demos/gif/Surface_Reconstruction.gif          | Bin 0 -> 2709843 bytes
+ .../demos/gif/basic+density_colored+Double_Dam.gif | Bin 0 -> 12654058 bytes
+ lab2/demos/gif/basic+speed_cloered+Dam_Break.gif   | Bin 0 -> 17552531 bytes
+ lab2/gui.py                                        | 215 ++++++++++++------
+ lab2_report.md                                     | 235 --------------------
+ lab2/report.md => report.md                        |   0
+ 17 files changed, 325 insertions(+), 441 deletions(-)
+
+commit ad0622d0165273265264a0224479ba455fba7e89
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 21:47:06 2026 +0800
+
+    fix: obstacle collision suction, density vibration, add GIF record & V-t curve
+    
+    - Fix obstacle collision: remove double-counted obs_vel from sphere/box
+      reflection, eliminating particle "suction" effect during drag/animation
+    - Restore one-directional density compensation (expand-only, k=0.5) to
+      fix vibration-at-rest regression caused by reintroduced compression branch
+    - Change animate obstacle Y to preserve current height instead of oscillating
+    - Add GIF recording to all demos (Record/Stop button in Debug panel,
+      saves via save_image at ~20fps, includes full window with controls)
+    - Add 3D V-t volume ratio curve (green polyline) above container, always
+      visible; add Vol ratio text to Controls panel
+    - Fix B3 Eulerian density advection AR: resolve template aliasing by
+      writing reflection result to _d_tmp2 before copy to density_new
+    - Add missing EulerianSimulator import in gui.py
+    - Update report: document dt sensitivity, expand-only compensation rationale
+    - Add imageio dependency for GIF export
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py        |  68 ++++-----
+ lab2/demos/b3.py    |   4 +-
+ lab2/demos/b4.py    |   2 +-
+ lab2/demos/b5.py    | 116 +++++++++++++++-
+ lab2/demos/basic.py |   7 +-
+ lab2/eulerian.py    |   3 +-
+ lab2/gui.py         | 198 +++++++++++++++++++++++----
+ lab2/report.md      |  77 +++++------
+ lab2/surface.py     | 388 ++--------------------------------------------------
+ pyproject.toml      |   1 +
+ uv.lock             | 249 ++++++++++++++++++++++++++++++++-
+ 11 files changed, 614 insertions(+), 499 deletions(-)
+
+commit cf2935113fdef63623d97c98f9343ab959f65a87
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 20:45:14 2026 +0800
+
+    fix: obstacle sticky drag with larger pick radius, correct direction, velocity slider
+    
+    - Sticky picking: latch onto obstacle on LMB press, drag until release
+    - Pick radius increased from 2.5x to 10x for spheres, making obstacles
+      actually clickable from the default camera distance
+    - Fix drag direction (was reversed relative to mouse movement)
+    - Narrow over_gui threshold from 0.55 to 0.42 to match actual GUI width
+    - Remove over_gui blocking from obstacle drag (ray hit proves 3D intent)
+    - Obstacle initial heights now y ≈ radius (sit near floor, not at y=0.25)
+    - Add dragSpeed slider (0.1-10.0) to control obstacle move speed
+    - Keep camera locked during obstacle drag/rotate
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 150 ++++++++++++++++++++++++++++++++++++------------------------
+ 1 file changed, 89 insertions(+), 61 deletions(-)
+
+commit 53197d009b86158e1477cb0ca76c30ffa129e3d5
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 16:08:09 2026 +0800
+
+    fix: b5 surface gaps and low FPS — auto arch, wider kernel, lower threshold
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/demos/b5.py | 116 ++++++++++++++++++------------
+ lab2/surface.py  | 209 ++++++++++++++++++++++++++++++++++++-------------------
+ 2 files changed, 209 insertions(+), 116 deletions(-)
+
+commit 1aff948caa83562099e031aaa795cb6eefcd41d2
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 16:02:07 2026 +0800
+
+    fix: remove unused dx parameter from _interp_field in Eulerian
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/eulerian.py | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+commit 47417fb4fab539ad07495210725e4f147fac20c2
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:54:24 2026 +0800
+
+    feat: render box obstacles with instanced mesh
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 48 +++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 35 insertions(+), 13 deletions(-)
+
+commit adcf76d8df5dd7ee45f6f683d63eeef9c35cf889
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:52:34 2026 +0800
+
+    feat: add ray-box pick, RMB rotation, unified obstacle interaction
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 92 +++++++++++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 68 insertions(+), 24 deletions(-)
+
+commit a057a8270331d2a26c84461f6247d1b43dda87a7
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:50:18 2026 +0800
+
+    feat: add box mesh geometry and quaternion math helpers
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+commit b24b39fe107d009228ce9ccdb001554dcd2cd827
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:49:19 2026 +0800
+
+    feat: update integrate_and_collide for box obstacle collision
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 82 +++++++++++++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 68 insertions(+), 14 deletions(-)
+
+commit b178e01ec9fb395060089b9fc1b55c7f79d4fa37
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:48:02 2026 +0800
+
+    feat: update mark_obstacle_cells for box obstacles
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 67 +++++++++++++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 50 insertions(+), 17 deletions(-)
+
+commit 50c7fd8ea8e213e1fd39626cb3bb29dd590e45fc
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:46:54 2026 +0800
+
+    feat: add obstacle type/rotation/size fields, update OBSTACLES config
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 25 +++++++++++++-----
+ lab2/gui.py  | 84 ++++++++++++++++++++++++++++++++++++++++++------------------
+ 2 files changed, 77 insertions(+), 32 deletions(-)
+
+commit 41ec81e4f7410272d6d94e1aaded81a959c7f646
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:43:09 2026 +0800
+
+    docs: implementation plan for obstacle drag & rotate
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ .../plans/2026-05-04-obstacle-drag-rotate.md       | 590 +++++++++++++++++++++
+ 1 file changed, 590 insertions(+)
+
+commit 02e53fa308944b658817f4ab389701c66ae392be
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 15:33:41 2026 +0800
+
+    docs: obstacle drag & rotate design spec
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ .../2026-05-04-obstacle-drag-rotate-design.md      | 139 +++++++++++++++++++++
+ 1 file changed, 139 insertions(+)
+
+commit 1249cc6bea382fbe8dc683934efebe3a48292fc4
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 12:47:07 2026 +0800
+
+    fix: density compensation, camera controls, macOS compatibility
+    
+    - Replace per-cell initial density with global rest density (computed once)
+    - One-directional drift compensation (expand only, k=0.5)
+    - Fix clamp_all_positions: don't teleport escaped particles to center
+    - Replace tkinter screen detection with CoreGraphics/User32 (macOS fix)
+    - Add mouse dead zone (0.002) to prevent click jitter
+    - Add Reset Camera button and Shake strength slider
+    - Fix UnboundLocalError for t_frame when toggling debug mid-run
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 13 +++++++------
+ lab2/gui.py  | 41 ++++++++++++++++++++++++++---------------
+ 2 files changed, 33 insertions(+), 21 deletions(-)
+
+commit 3d2467b04214371fe52786c76200365795987436
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 10:53:36 2026 +0800
+
+    fix: Drop/DoubleDam init (Taichi parallel counter), replace Perturb with container shake
+    
+    - init_drop/init_double_dam: remove broken `count` variable in parallel
+      for-loop (per-thread local scalar), use index `i` directly
+    - init_double_dam: fix spacing mismatch (dx → dx*0.7 to match particle count)
+    - Replace radial Perturb with toggle-style container shake (sinusoidal
+      horizontal impulse at 1.2Hz, amplitude 20)
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 209 +++++++++++++++++++++++++++++------------------------------
+ lab2/gui.py  |  56 +++++++++++-----
+ 2 files changed, 143 insertions(+), 122 deletions(-)
+
+commit 5d16078e31dcf70c42bb349880eb42cdddb1ef55
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 00:52:38 2026 +0800
+
+    fix: restore particle radius to dx*0.15
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+commit 251d3b4a383d7063692aa9d55311786f9ec1e44c
+Author: xjsongphy <m18892286119@163.com>
+Date:   Mon May 4 00:51:01 2026 +0800
+
+    fix: obstacle drag, GUI input isolation, B3 AR advection, per-demo panels
+    
+    - Obstacle: camera-relative drag (move_scale=1.5), bounding-box perf optimization
+    - GUI: block world interaction when cursor on left half (cx < 0.55)
+    - Per-demo panels: basic/b3/b4 each show only relevant controls
+    - B3: Advection-Reflection density advection + density init fix
+    - Surface: compact MC lookup table (hex bytes) + complete 256 entries
+    - dt slider range 0.002-0.02, particle radius 0.5*dx
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ imgui.ini           |   8 +-
+ lab2/core.py        |  12 +-
+ lab2/demos/b3.py    |   3 +
+ lab2/demos/b4.py    |   5 +
+ lab2/demos/b5.py    |  86 +++++----
+ lab2/demos/basic.py |   5 +-
+ lab2/eulerian.py    | 184 +++++++++++---------
+ lab2/gui.py         | 177 ++++++++++---------
+ lab2/surface.py     | 489 ++++++++++++++++++++++++++++++++++++----------------
+ 9 files changed, 621 insertions(+), 348 deletions(-)
+
+commit 56a88d8bcac92bd6f487ee36b89add0c80136cf9
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:46:19 2026 +0800
+
+    fix: remove slow motion, reduce default dt and particle sizes
+    
+    - Remove slow motion controls (use dt slider instead)
+    - Reduce default dt range from 0.001~0.03 to 0.0005~0.015
+    - Reduce fluid particle radius from 0.25*dx to 0.15*dx
+    - Reduce container wireframe radius from 0.08*dx to 0.05*dx
+    - Update b5 demo particle radius accordingly
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/demos/b5.py |  2 +-
+ lab2/gui.py      | 22 +++++-----------------
+ 2 files changed, 6 insertions(+), 18 deletions(-)
+
+commit 397f3201bf46614aa60fd2a30d0da203affa1ba1
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:41:19 2026 +0800
+
+    fix: reduce obstacle height and add slow motion controls
+    
+    - Reduce cylinder obstacle radius from 0.08 to 0.04
+    - Reduce cylinder obstacle height from 0.6 to 0.4
+    - Move obstacle center y from 0.4 to 0.5
+    - Add slow motion controls (0.25x, 0.5x, 1.0x, 2.0x)
+    - Fix EulerianSimulator num_particles variable scope
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ imgui.ini        |  9 +++++++--
+ lab2/core.py     |  7 +++----
+ lab2/eulerian.py |  3 ++-
+ lab2/gui.py      | 16 ++++++++++++++--
+ 4 files changed, 26 insertions(+), 9 deletions(-)
+
+commit 27719ae5e0eab891b5ad409938c6e87d5f434aa2
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:31:43 2026 +0800
+
+    docs: add Lab 2作业报告
+    
+    - 核心代码思路说明（FLIP算法、P2G/G2P、压力投影）
+    - 交互方法详解（GUI控件、3D交互）
+    - Demo展示（FLIP、B5表面重建、B3欧拉流体）
+    - 实验结果与对比（FLIP vs PIC、Gauss-Seidel vs CG）
+    - 技术要点总结
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2_report.md | 235 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 235 insertions(+)
+
+commit 9996d7ac017662de0a4710087c18b4b2e2c8329b
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:16:59 2026 +0800
+
+    feat: add dam break with cylindrical obstacle scene
+    
+    - Add init_dam_break_with_obstacle() kernel with cylindrical obstacle
+    - Add scene_particle_count for "Dam Break with Obstacle"
+    - Update b5 to use obstacle scene with surface reconstruction
+    - Obstacle is a cylinder with radius 0.08 and height 0.6 centered at (0.25, 0.4, 0.25)
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py     | 80 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ lab2/demos/b5.py |  4 +--
+ 2 files changed, 82 insertions(+), 2 deletions(-)
+
+commit 1d849b3aa52d1191e6a4d5bba2db76ba5edf619e
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:12:44 2026 +0800
+
+    fix: smooth density color transitions for B3
+    
+    - Add render_color cache for Eulerian simulator
+    - Only update particle colors when density changes significantly (>0.1 threshold)
+    - This prevents color flickering while maintaining visual feedback for large density changes
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ imgui.ini        |  4 ++--
+ lab2/eulerian.py | 25 +++++++++++++++++++------
+ lab2/gui.py      |  6 ++----
+ 3 files changed, 23 insertions(+), 12 deletions(-)
+
+commit 6111ae310e4b6f0e4f6f2c9b4cc2d92bce979dca
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 23:01:45 2026 +0800
+
+    fix: double dam particle count, density flickering, eulerian rendering
+    
+    B5 demo:
+    - Fix double dam particle count issue
+      - Correct scene/dem class initialization mapping
+      - "Double Dam" scene now correctly uses init_double_dam()
+    
+    GUI:
+    - Fix density color flickering
+      - Only update density colors once after initialization
+      - Real-time density changes cause too much flickering
+    
+    Eulerian (B3):
+    - Fix density not being preserved in simulation
+      - Use density_new field for advection output
+      - Copy density_new to density after each substep
+    - Fix rendering showing cuboid instead of sphere
+      - Changed density threshold from 3/4 height to 1/2 height
+      - Density field now correctly shows particle distribution
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py     |  3 +++
+ lab2/demos/b5.py |  2 +-
+ lab2/eulerian.py | 14 ++++++++------
+ lab2/gui.py      |  6 +++++-
+ 4 files changed, 17 insertions(+), 8 deletions(-)
+
+commit d32081d8006659eb3d8a0cfb8b77c8af56d6263f
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 22:46:23 2026 +0800
+
+    fix: density clustering and b5 freezing issues
+    
+    Core fixes:
+    - Fix density clustering in particle initialization
+      - Use exact cell count instead of modulo wrapping
+      - Replace spacing-based initialization with grid-aligned positions
+      - Properly constrain particles within their designated boxes
+    - Fix stuck particle rescue in clamp_all_positions()
+      - Move stuck particles to safe position [-100.0] instead of clamping to eps
+    
+    B5 demo fixes:
+    - Restore Dam Break scene with previous settings (threshold=0.3, mc_res=2)
+    - Reduce mesh rebuild frequency from every 5 to every 10 frames (after 30 frame delay)
+    - Add delay to allow particles to settle before mesh reconstruction
+    
+    All demos now have consistent initialization using dx-based spacing instead of
+    spacing-based initialization, ensuring uniform particle distribution.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py     | 159 ++++++++++++++++++++++++++++++++++++-------------------
+ lab2/demos/b5.py |   9 ++--
+ 2 files changed, 110 insertions(+), 58 deletions(-)
+
+commit b378a5b91261b49e558d636a72f06a25077a424b
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 22:36:09 2026 +0800
+
+    fix: remove use_cg arg from gui.py and fix fluid volume computation
+    
+    - Remove use_cg argument from substep_fn call in gui.py to fix Eulerian demo crash
+    - Fix compute_fluid_volume kernel to avoid return inside non-static if/for
+    - Update b5 demo to use threshold=0.4, mc_res=1 for better performance
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ imgui.ini                                          |  13 +-
+ lab2/core.py                                       |  10 +-
+ lab2/demos/b5.py                                   |  11 +-
+ lab2/gui.py                                        |   6 +-
+ lab2/surface.py                                    |  78 +-
+ lab2/tests/test_simulation.py                      | 192 +++++
+ ref/Advection-Reflection.md                        | 374 +++++++++
+ ...ity Projection for Volume Conserving Liquids.md | 419 ++++++++++
+ uv.lock                                            |   2 +-
+ ...273\277\347\234\237\350\256\262\344\271\211.md" | 850 +++++++++++++++++++++
+ 10 files changed, 1917 insertions(+), 38 deletions(-)
+
+commit 49b4acade88908ef83be92a5d68e99016f02d73f
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 22:01:53 2026 +0800
+
+    feat: animated stirrer obstacle + V-t volume tracking
+    
+    - Add 'Stirrer' preset: sphere orbits in Lissajous pattern
+    - Add 'Animate ON/OFF' toggle in Obstacle panel
+    - Volume ratio (V/V0) displayed and graphed in debug panel
+    - Text-based V-t bar chart with history
+    - sim_time tracks elapsed simulation time
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 22 ++++++++++++++++++++++
+ lab2/gui.py  | 42 ++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 62 insertions(+), 2 deletions(-)
+
+commit 34be1509c59801962641a0213f834a6c73e3127d
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 21:18:00 2026 +0800
+
+    fix: rescue stuck particles (pos < 0) after push_particles_apart
+    
+    Root cause: push_particles_apart could push boundary particles to
+    negative positions. All kernels skip particles with pos < 0, so
+    they become permanently stuck and render as black dots.
+    
+    Fix: add clamp_all_positions() after every push_particles_apart call.
+    
+    Debug: in debug mode, count stuck particles and color them red.
+    STUCK count shown in Debug Timing panel.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 38 ++++++++++++++++++++++++++++++++++++++
+ lab2/flip.py |  3 +++
+ lab2/gui.py  |  6 +++++-
+ 3 files changed, 46 insertions(+), 1 deletion(-)
+
+commit 87717a792c6fa9a3fd74911e2ec69d3c7adfb9b9
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 21:03:07 2026 +0800
+
+    fix: reduce particle jitter from separation and drift compensation
+    
+    - Reduce push_particles_apart correction factor from 0.7 to 0.3
+    - Reduce min_dist from dx*0.6 to dx*0.5
+    - Halve drift compensation strength from 0.1 to 0.05
+    
+    These changes reduce visible particle bouncing while maintaining
+    numerical stability.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+commit 75152b4bd04d96bed543265504348fe730309f85
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 21:00:05 2026 +0800
+
+    docs: add lab2 report draft with code references
+    
+    Report covers core FLIP implementation, MAC staggered grid,
+    PIC/FLIP hybrid transfer, GS/CG pressure solvers, and all
+    bonus features (B1-B5). Demo screenshots left as TODOs.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/report.md | 243 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 243 insertions(+)
+
+commit f8f5364536f409e4ecb7ff20bb3b0d65662ab750
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:55:50 2026 +0800
+
+    feat: add FLIP/APIC method toggle in GUI for B4 comparison
+    
+    New button in Controls panel switches between FLIP and APIC simulator,
+    triggering deferred recreation with the selected method.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/gui.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+commit d3d011eb21c51cd49603edbdc08616a6fe7bce09
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:55:31 2026 +0800
+
+    fix: remove all inactive particles — every particle is now used
+    
+    - Remove else branches from init_dam_break/init_double_dam that placed
+      unused particles off-screen
+    - init_colors no longer checks pos >= 0 since all particles are active
+    - Add APIC import and sim_method state to GUI for B4 comparison
+    - scene_particle_count must exactly match kernel computation
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 41 +++++++++++++++--------------------------
+ lab2/gui.py  | 11 ++++++++---
+ 2 files changed, 23 insertions(+), 29 deletions(-)
+
+commit 3c0870504518276a1b7348f52ab9404eb8011d5c
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:52:12 2026 +0800
+
+    fix: Taichi CG scalar fields, module build, hidden unused particles
+    
+    - Add [build-system] to pyproject.toml so uv sync works
+    - Change CG scalar fields from shape=() to shape=(1) for Taichi compat
+    - Move inactive particles below domain (y=-10) so they're invisible
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py     | 26 +++++++++++++-------------
+ lab2/eulerian.py |  3 ++-
+ pyproject.toml   |  4 ++++
+ 3 files changed, 19 insertions(+), 14 deletions(-)
+
+commit 3a2f4cdda6d5f5b3f8fd55f4aeb0d57b44a498f1
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:47:08 2026 +0800
+
+    feat: B1 color selector + obstacle drag, B2 CG pressure solver
+    
+    B1:
+    - Restore Speed/Density/Uniform color mode selector
+    - LMB drag obstacle via ray-sphere intersection picking
+    - Fix camera: RMB=orbit, LMB=pan (or drag obstacle if hit)
+    - Smaller particle radius for better visualization
+    
+    B2:
+    - Implement Conjugate Gradient pressure solver in core.py
+    - Add CG/GS toggle button in GUI Controls panel
+    - Pass use_cg flag through substep pipeline
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py | 151 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ lab2/flip.py |  12 +++--
+ lab2/gui.py  |  83 ++++++++++++++++++++++++++++----
+ 3 files changed, 233 insertions(+), 13 deletions(-)
+
+commit 0b5b0bac6faf5e90bafa0b204111fb138c7fbf57
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:40:59 2026 +0800
+
+    feat: implement Marching Cubes surface reconstruction from particles
+    
+    Builds density field via Gaussian splatting on refined grid, extracts
+    isosurface triangle mesh using 256-case Marching Cubes lookup tables.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/surface.py | 201 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 201 insertions(+)
+
+commit 6973794bd414c2d8498c8b74b5aaf54930dd29b4
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:40:59 2026 +0800
+
+    feat: implement APIC (Affine Particle-In-Cell) fluid simulator
+    
+    Extends FLIP with 3x3 affine velocity matrix C per particle, preserving
+    angular momentum during P2G/G2P transfers via central-difference gradient.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/apic.py | 154 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 154 insertions(+)
+
+commit fe25e11e676e3934e56af972bebde4617cb6c59d
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:40:51 2026 +0800
+
+    feat: add Advection Reflection method to FLIP simulator
+    
+    Implements the reflection operator R = 2P - I across the divergence-free
+    manifold, splitting each substep into two half-steps with reflected
+    velocity advection.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/flip.py | 67 +++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 62 insertions(+), 5 deletions(-)
+
+commit 031f76a77d4c040878c9cb20ea6c0dec8bf3aab2
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:40:31 2026 +0800
+
+    refactor: multi-obstacle support and combined relabel+density pass
+    
+    - Extend obstacle system from single sphere to up to 4 spheres
+    - Merge relabel_cells + update_particle_density into relabel_and_density
+    - Consolidate integrate + collide into single kernel
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ .gitignore   |   2 +
+ lab2/core.py | 117 ++++++++++++++++++++++++++++-------------------------------
+ 2 files changed, 57 insertions(+), 62 deletions(-)
+
+commit 13fdfe1294d560ab4aa74d722e26cc32be3a6f09
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 20:32:25 2026 +0800
+
+    feat: add --debug CLI flag and b1 demo alias
+    
+    Debug mode (profiling/timing overlay) can now be enabled via
+    `uv run lab2 --debug` or `uv run lab2 --demo b1 --debug`.
+    Also adds missing b1 alias for the basic FLIP demo.
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/__main__.py    |   8 ++-
+ lab2/demos/b3.py    |   3 +-
+ lab2/demos/b4.py    |  33 ++++++++++++
+ lab2/demos/b5.py    | 102 +++++++++++++++++++++++++++++++++++
+ lab2/demos/basic.py |   6 +--
+ lab2/gui.py         | 150 +++++++++++++++++++++++++++++++---------------------
+ 6 files changed, 237 insertions(+), 65 deletions(-)
+
+commit 64a5b333c11e605ec87ce5ccae6c212e7b3f82e1
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 18:00:43 2026 +0800
+
+    Clear @taichi
+
+ taichi/taichi_demo.py       | 145 ----------------------
+ taichi/taichi_lab1_empty.py | 294 --------------------------------------------
+ 2 files changed, 439 deletions(-)
+
+commit c0540ff155aae7c9de29fee82a1eaebc20e01b71
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 17:53:26 2026 +0800
+
+    feat: initial B2 FLIP + B3 Eulerian fluid simulation
+    
+    B2 (FLIP/PIC hybrid):
+    - Staggered grid with Red-Black Gauss-Seidel pressure projection
+    - Grid-based particle separation (spatial hashing, O(n*k))
+    - Multiple scenes: dam break, drop, double dam
+    - Obstacle presets (none/1 sphere/1 big sphere)
+    - Resolution presets (Low/Med/High)
+    - Color modes (speed/density/uniform)
+    - Orbit camera (LMB rotate, RMB pan, R/F zoom)
+    - Debug timing overlay
+    - Screen resolution auto-detection (Tkinter)
+    - All particles active (exact count per scene)
+    
+    B3 (Eulerian grid-based):
+    - Pure grid-based semi-Lagrangian advection
+    - Velocity self-advection + density scalar transport
+    - Reuses B2 pressure solver and cell type management
+    - Density field visualization via render proxies
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ imgui.ini           |  30 +++++++
+ lab2/core.py        | 161 +++++++++++++++++++++++++----------
+ lab2/demos/b3.py    |  29 +++++++
+ lab2/demos/basic.py |  12 +--
+ lab2/eulerian.py    | 194 ++++++++++++++++++++++++++++++++++++++++++
+ lab2/flip.py        |   4 +-
+ lab2/gui.py         | 238 +++++++++++++++++++++++++++++++++++++++++-----------
+ 7 files changed, 564 insertions(+), 104 deletions(-)
+
+commit af0b4e99a9cfed71cd398fd64b3c568615ebe2a4
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 10:54:36 2026 +0800
+
+    fix: stabilize FLIP simulation — particles no longer escape domain
+    
+    Key fixes addressing particles flying away under gravity:
+    
+    1. Boundary constraint (C1): Changed collision boundary from [dx, 1-dx]
+       to [1e-6, 1-1e-6]. The old boundary shrunk the domain by a full cell,
+       causing density/velocity mismatch at edges.
+    
+    2. Cell relabeling (C2): Added relabel_cells() kernel called each substep
+       to refresh fluid/air labels from particle positions. Previously, stale
+       cell_type caused the pressure solver to misidentify fluid regions.
+    
+    3. Pressure solver (I5): Replaced parallel iteration (Jacobi) with proper
+       Red-Black Gauss-Seidel using _gs_pass(color) kernel, significantly
+       improving convergence for the incompressibility constraint.
+    
+    Other changes:
+    - Added staggered grid convention docstring to FluidSimulator
+    - Added multiple scene inits: init_drop(), init_double_dam()
+    - Added apply_perturbation() kernel for stirring fluid
+    - Added mouse-driven sphere obstacle with LMB drag interaction
+    - Added GUI controls: scene selector, obstacle toggle, color modes
+    - Obstacle fields changed to shape=(1,) for GGUI compatibility
+    - Removed unused self.pressure field
+    - push_particles_apart disabled (O(n²) GPU crash), needs spatial hash
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2/core.py        | 413 ++++++++++++++++++++++++++++++++++------------------
+ lab2/demos/basic.py |  19 +--
+ lab2/flip.py        | 164 +++++++++------------
+ lab2/gui.py         | 139 +++++++++++++++---
+ 4 files changed, 465 insertions(+), 270 deletions(-)
+
+commit 39653e96257b3efe594c455259dc81c0b5eaea64
+Author: xjsongphy <m18892286119@163.com>
+Date:   Sun May 3 10:25:18 2026 +0800
+
+    feat: implement 3D FLIP fluid simulation with Taichi GGUI
+    
+    Core components:
+    - core.py: staggered grid (MAC), Gauss-Seidel pressure solver,
+      particle integration, collision handling
+    - flip.py: PIC/FLIP hybrid simulator with P2G/G2P transfer
+      using linear interpolation on staggered grid
+    - gui.py: GGUI rendering with interactive sliders (dt, flipRatio, gravity)
+    - demos/basic.py: dam break scene, uv run lab2 entry point
+    
+    Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+ lab2-Flip.md           | 122 ++++++++++++++++++
+ lab2/__init__.py       |   0
+ lab2/__main__.py       |  24 ++++
+ lab2/core.py           | 338 +++++++++++++++++++++++++++++++++++++++++++++++++
+ lab2/demos/__init__.py |   0
+ lab2/demos/basic.py    |  44 +++++++
+ lab2/flip.py           | 192 ++++++++++++++++++++++++++++
+ lab2/gui.py            |  84 ++++++++++++
+ pyproject.toml         |  12 +-
+ uv.lock                | 155 +++++++++++++++++++++++
+ 10 files changed, 969 insertions(+), 2 deletions(-)
+
+commit f3c5f7e43cf446f816c7b699b2def81c4c24811f
+Author: xjsongphy <m18892286119@163.com>
+Date:   Fri May 1 14:26:14 2026 +0800
+
+    Initial commit
+
+ .gitignore                  |  10 ++
+ .python-version             |   1 +
+ README.md                   |   0
+ main.py                     |   6 +
+ pyproject.toml              |   7 ++
+ taichi/taichi_demo.py       | 145 ++++++++++++++++++++++
+ taichi/taichi_lab1_empty.py | 294 ++++++++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 463 insertions(+)
