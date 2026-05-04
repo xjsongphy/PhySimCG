@@ -1,5 +1,7 @@
 # Lab 2：基于 FLIP 的流体仿真实验报告
 
+[GitHub 仓库](https://github.com/xjsongphy/PhySimCG)
+
 ## 1 概述
 
 本实验实现了一个完整的 3D FLIP（Fluid Implicit Particle）流体仿真框架。FLIP 是一种**混合拉格朗日-欧拉方法**，它结合了粒子法（用于平流，避免数值耗散）和网格法（用于压力投影，高效求解不可压缩性）的优势。整个仿真基于 Taichi 并行计算框架实现，运行在 Vulkan 后端上，并使用 Taichi GGUI 提供交互式 3D 渲染。
