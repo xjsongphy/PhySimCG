@@ -30,12 +30,18 @@ def _get_screen_resolution() -> tuple:
 SCENES = ["Dam Break", "Drop", "Double Dam"]
 OBSTACLES = {
     "None":          [],
-    "1 Sphere":      [(0.06, (0.5, 0.35, 0.5))],
-    "2 Spheres":     [(0.05, (0.35, 0.4, 0.35)), (0.05, (0.65, 0.3, 0.65))],
-    "3 Spheres":     [(0.045, (0.3, 0.45, 0.3)), (0.045, (0.7, 0.35, 0.7)),
-                      (0.045, (0.5, 0.38, 0.5))],
-    "1 Big + 1 Small":[(0.09, (0.5, 0.38, 0.5)), (0.04, (0.7, 0.35, 0.3))],
-    "Stirrer":       [(0.08, (0.5, 0.35, 0.5))],
+    "1 Sphere":      [("sphere", 0.06, None, (0.5, 0.25, 0.5))],
+    "2 Spheres":     [("sphere", 0.05, None, (0.35, 0.25, 0.35)),
+                      ("sphere", 0.05, None, (0.65, 0.25, 0.65))],
+    "3 Spheres":     [("sphere", 0.045, None, (0.3, 0.25, 0.3)),
+                      ("sphere", 0.045, None, (0.7, 0.25, 0.7)),
+                      ("sphere", 0.045, None, (0.5, 0.25, 0.5))],
+    "1 Big + 1 Small":[("sphere", 0.09, None, (0.5, 0.28, 0.5)),
+                       ("sphere", 0.04, None, (0.7, 0.25, 0.3))],
+    "Stirrer":       [("sphere", 0.08, None, (0.5, 0.25, 0.5))],
+    "1 Box":         [("box", None, (0.08, 0.06, 0.08), (0.5, 0.25, 0.5))],
+    "Sphere + Box":  [("sphere", 0.05, None, (0.35, 0.25, 0.35)),
+                      ("box", None, (0.06, 0.08, 0.06), (0.65, 0.25, 0.65))],
 }
 class _Profiler:
     """Lightweight frame profiler. Only active when debug_mode is True."""
@@ -81,9 +87,18 @@ def _create_sim(scene_name, nx, ny, nz, obstacle_name, method="FLIP"):
     sim.store_initial_density()
     obs_list = OBSTACLES.get(obstacle_name, OBSTACLES["None"])
     sim.obstacle_count[None] = len(obs_list)
-    for o, (r_i, pos_i) in enumerate(obs_list):
-        sim.obstacle_radius[o] = r_i
+    for o, item in enumerate(obs_list):
+        type_str, r_i, size_i, pos_i = item
+        if type_str == "box":
+            sim.obstacle_type[o] = 1
+            sim.obstacle_size[o] = size_i
+            sim.obstacle_radius[o] = 0.0
+        else:
+            sim.obstacle_type[o] = 0
+            sim.obstacle_radius[o] = r_i
+            sim.obstacle_size[o] = [0.0, 0.0, 0.0]
         sim.obstacle_pos[o] = pos_i
+        sim.obstacle_rotation[o] = [1.0, 0.0, 0.0, 0.0]
     return sim
 
 
@@ -162,7 +177,8 @@ def run_gui(
     animate_obstacle = False
     sim_time = 0.0
     shaking = False
-    shake_strength = 5.0
+    shake_strength = 3.0
+    shake_freq = 0.5
 
     # Mouse tracking
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
@@ -205,7 +221,8 @@ def run_gui(
                     _recreate = (name, sim.nx, sim.ny, sim.nz)
             if g.button("Shake: ON" if shaking else "Shake: OFF"):
                 shaking = not shaking
-            shake_strength = g.slider_float("Shake", shake_strength, 0.0, 30.0)
+            shake_strength = g.slider_float("Strength", shake_strength, 0.0, 20.0)
+            shake_freq = g.slider_float("Freq", shake_freq, 0.1, 3.0)
 
         # --- GUI: Resolution ---
         if show_resolution:
@@ -253,12 +270,20 @@ def run_gui(
                         obstacle_name = name
                         obs_list = OBSTACLES[name]
                         sim.obstacle_count[None] = len(obs_list)
-                        for o, (r_i, pos_i) in enumerate(obs_list):
-                            sim.obstacle_radius[o] = r_i
+                        for o, item in enumerate(obs_list):
+                            type_str, r_i, size_i, pos_i = item
+                            if type_str == "box":
+                                sim.obstacle_type[o] = 1
+                                sim.obstacle_size[o] = size_i
+                                sim.obstacle_radius[o] = 0.0
+                            else:
+                                sim.obstacle_type[o] = 0
+                                sim.obstacle_radius[o] = r_i
+                                sim.obstacle_size[o] = [0.0, 0.0, 0.0]
                             sim.obstacle_pos[o] = pos_i
+                            sim.obstacle_rotation[o] = [1.0, 0.0, 0.0, 0.0]
                 if sim.obstacle_count[None] > 0:
-                    g.text("  LMB: drag in camera plane")
-                    g.text("  RMB: move up/down")
+                    g.text("  LMB: move | RMB: rotate")
                 if g.button("Animate ON" if not animate_obstacle else "Animate OFF"):
                     animate_obstacle = not animate_obstacle
 
@@ -319,7 +344,10 @@ def run_gui(
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
         forward_n = forward / (np.linalg.norm(forward) + 1e-8)
-        world_up = np.array([0.0, 1.0, 0.0])
+        if abs(forward_n[1]) > 0.99:
+            world_up = np.array([1.0, 0.0, 0.0])
+        else:
+            world_up = np.array([0.0, 1.0, 0.0])
         right_cam = np.cross(forward_n, world_up)
         right_cam = right_cam / (np.linalg.norm(right_cam) + 1e-8)
         cam_up = np.cross(right_cam, forward_n)
@@ -344,10 +372,12 @@ def run_gui(
                 obs_r = sim.obstacle_radius[o]
                 if obs_r <= 0:
                     continue
-                oc = cam_pos - np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                pick_r = max(obs_r * 2.5, 0.04)
+                obs_c = np.array([sim.obstacle_pos[o][0], sim.obstacle_pos[o][1], sim.obstacle_pos[o][2]])
+                oc = cam_pos - obs_c
                 a = ray_dir.dot(ray_dir)
                 b = 2.0 * oc.dot(ray_dir)
-                c = oc.dot(oc) - obs_r * obs_r
+                c = oc.dot(oc) - pick_r * pick_r
                 disc = b * b - 4 * a * c
                 if disc >= 0:
                     t = (-b - np.sqrt(disc)) / (2 * a)
@@ -396,7 +426,7 @@ def run_gui(
             if rmb:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
-                cam_pitch = np.clip(cam_pitch, 0.05, 1.5)
+                cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
 
             if lmb and not over_gui:
                 pan_speed = cam_dist * 0.8
@@ -441,20 +471,20 @@ def run_gui(
         if debug_mode:
             t_sim = time.perf_counter()
         if not paused:
+            if shaking:
+                freq = 1.2
+                gx = shake_strength * np.sin(sim_time * shake_freq * 2 * np.pi)
+                gz = shake_strength * np.cos(sim_time * shake_freq * 2 * np.pi) * 0.7
+                sim.apply_horizontal_impulse(gx * current_dt, gz * current_dt)
             if sim.obstacle_count[None] > 0:
                 sim.mark_obstacle_cells()
             for _ in range(num_substeps):
-                if shaking:
-                    freq = 1.2
-                    gx = shake_strength * np.sin(sim_time * freq * 2 * np.pi)
-                    gz = shake_strength * np.cos(sim_time * freq * 2 * np.pi) * 0.7
-                    sim.apply_horizontal_impulse(gx * current_dt, gz * current_dt)
                 substep_fn(
                     dt=current_dt,
                     flip_ratio=current_flip_ratio,
                     gravity=current_gravity,
                 )
-                sim_time += current_dt
+            sim_time += current_dt * num_substeps
         if debug_mode:
             _profiler.record("sim", (time.perf_counter() - t_sim) * 1000)
 
@@ -497,10 +527,14 @@ def run_gui(
                 if obs_r > 0:
                     obs_pos_field = ti.Vector.field(3, dtype=float, shape=(1,))
                     obs_pos_field[0] = sim.obstacle_pos[o]
+                    if o == picked_obs:
+                        color = (0.9, 0.8, 0.2)  # yellow = hovered
+                    else:
+                        color = (0.8, 0.3, 0.3)  # red = normal
                     scene.particles(
                         obs_pos_field,
                         radius=obs_r * 0.95,
-                        color=(0.8, 0.3, 0.3),
+                        color=color,
                     )
 
         canvas.scene(scene)

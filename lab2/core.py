@@ -125,13 +125,19 @@ class FluidSimulator:
         # Color mode flags
         self._color_density_updated = False
 
-        # Obstacles (up to 4 spheres)
+        # Obstacles (up to 4 spheres/boxes)
         self._max_obstacles = 4
         self.obstacle_count = ti.field(dtype=int, shape=())
         self.obstacle_pos = ti.Vector.field(3, dtype=float, shape=(4,))
         self.obstacle_vel = ti.Vector.field(3, dtype=float, shape=(4,))
         self.obstacle_radius = ti.field(dtype=float, shape=(4,))
+        self.obstacle_type = ti.field(dtype=int, shape=(4,))          # 0=sphere, 1=box
+        self.obstacle_rotation = ti.Vector.field(4, dtype=float, shape=(4,))  # quaternion (w,x,y,z)
+        self.obstacle_size = ti.Vector.field(3, dtype=float, shape=(4,))      # box half-extents
         self.obstacle_count[None] = 0
+        for o in range(4):
+            self.obstacle_rotation[o] = [1.0, 0.0, 0.0, 0.0]
+            self.obstacle_size[o] = [0.0, 0.0, 0.0]
 
     # ---- Scene Initialization ----
 
@@ -431,7 +437,7 @@ class FluidSimulator:
             for o in ti.static(range(self._max_obstacles)):
                 if o < self.obstacle_count[None] and self.obstacle_radius[o] > 0:
                     obs_pos = self.obstacle_pos[o]
-                    obs_r = self.obstacle_radius[o]
+                    obs_r = self.obstacle_radius[o] + 0.01
                     diff = self.pos[i] - obs_pos
                     dist = diff.norm()
                     if dist < obs_r and dist > 1e-8:
@@ -441,7 +447,8 @@ class FluidSimulator:
                         rel_vel = self.vel[i] - obs_vel
                         vn = rel_vel.dot(n)
                         if vn < 0:
-                            self.vel[i] = self.vel[i] - n * vn + obs_vel * 0.5
+                            self.vel[i] -= n * vn * 1.5
+                            self.vel[i] += obs_vel
 
     def handle_particle_collisions(self):
         """Compatibility: use integrate_and_collide with zero dt."""
@@ -472,7 +479,7 @@ class FluidSimulator:
     @ti.kernel
     def _separate_pass(self):
         dx = self.dx
-        min_dist = dx * 0.5
+        min_dist = dx * 0.3
         min_dist2 = min_dist * min_dist
         for p in range(self.num_particles):
             if self.pos[p][0] < 0:
@@ -575,7 +582,9 @@ class FluidSimulator:
                     - self._target_density[None]
                 )
                 if density_diff > 0.0:
-                    div -= density_diff * 0.5
+                    div -= density_diff * 0.2
+                else:
+                    div -= density_diff * 0.08
 
             correction = over_relaxation * div / s
 
@@ -653,7 +662,9 @@ class FluidSimulator:
                     - self._target_density[None]
                 )
                 if density_diff > 0.0:
-                    div -= density_diff * 0.5
+                    div -= density_diff * 0.2
+                else:
+                    div -= density_diff * 0.08
             self._cg_r[i, j, k] = div
 
     @ti.kernel
@@ -796,7 +807,7 @@ class FluidSimulator:
             if self.pos[i][0] >= 0:
                 speed = self.vel[i].norm()
                 t = ti.min(speed / 5.0, 1.0)
-                self.color[i] = [0.2 + 0.8 * t, 0.5 + 0.5 * t, 1.0]
+                self.color[i] = [0.1 + 0.9 * t, 0.2 + 0.7 * t, 0.9 - 0.7 * t]
             else:
                 self.color[i] = [0.1, 0.1, 0.15]
 
