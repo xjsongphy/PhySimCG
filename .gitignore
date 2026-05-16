@@ -10,3 +10,6 @@ taichi
 
 # Virtual environments
 .venv
+
+# MacOS files
+.DS_Store
