@@ -226,27 +226,27 @@ def _scatter_density(pos, density, mc_nx, mc_ny, mc_nz, mc_dx, sigma):
 
 ## 4 Demo 展示
 
-各 Demo 通过统一入口 `uv run lab2` 启动，通过 `--demo` 参数选择具体演示。所有演示的 GIF 动图可在 `lab2/demos/gif/` 目录下查看。
+各 Demo 通过统一入口 `uv run lab2` 启动，通过 `--demo` 参数选择具体演示。所有演示的 GIF 动图可在 `../demos/gif/` 目录下查看。
 
 ### 4.1 基础 FLIP 仿真（Basic / B1 / B2）
 
-![Dam Break - Speed Colored](lab2/demos/gif/basic+speed_cloered+Dam_Break.gif)
+![Dam Break - Speed Colored](../demos/gif/basic+speed_cloered+Dam_Break.gif)
 
 **Dam Break 场景（速度着色）**：24×48×24 网格分辨率，展示溃坝场景的经典流体形态。粒子颜色根据速度从深蓝色（静止）渐变到金黄色（高速），直观呈现流体下落、撞击壁面和回溅的速度分布。
 
-![Double Dam - Density Colored](lab2/demos/gif/basic+density_colored+Double_Dam.gif)
+![Double Dam - Density Colored](../demos/gif/basic+density_colored+Double_Dam.gif)
 
 **Double Dam 场景（密度着色）**：双溃坝场景展示流体对称碰撞和混合过程。密度着色模式反映每个单元内的粒子数量，可清晰观察到流体交界面的混合区域和稀疏-致密结构的动态演化。
 
 ### 4.2 共轭梯度求解器（B2）
 
-![CG Solver](lab2/demos/gif/CG.gif)
+![CG Solver](../demos/gif/CG.gif)
 
 **视觉效果**：CG 和 APIC 都使得流体运动更加"丝滑"。不过帧率并没有显著的区别。
 
 ### 4.3 APIC 方法（B4）
 
-![APIC Method](lab2/demos/gif/APIC.gif)
+![APIC Method](../demos/gif/APIC.gif)
 
 运行命令：`uv run lab2 --demo b4`
 
@@ -260,19 +260,19 @@ def _scatter_density(pos, density, mc_nx, mc_ny, mc_nz, mc_dx, sigma):
 
 ### 4.5 表面重建（B5）
 
-![Surface Reconstruction](lab2/demos/gif/Surface_Reconstruction.gif)
+![Surface Reconstruction](../demos/gif/Surface_Reconstruction.gif)
 
 **Marching Cubes 表面重建**：上图展示从 FLIP 粒子提取三角形网格的过程。密度场通过 GPU 并行高斯核散射计算（$\sigma = 1.6\Delta x$），在阈值 $\tau = 0.4$ 处提取等值面。重建后的网格以实体面片模式渲染，配合三点光源营造类镜面反射效果。
 
 ### 4.6 障碍物交互
 
-![Moving Obstacle](lab2/demos/gif/Moving_Obstacle.gif)
+![Moving Obstacle](../demos/gif/Moving_Obstacle.gif)
 
-![Manually Moving Obstacle](lab2/demos/gif/Manually_Moving_Obstacle.gif)
+![Manually Moving Obstacle](../demos/gif/Manually_Moving_Obstacle.gif)
 
 ### 4.7 晃动效果
 
-![Shake](lab2/demos/gif/Shake.gif)
+![Shake](../demos/gif/Shake.gif)
 
 **容器晃动**：上图展示通过周期性改变重力方向模拟容器晃动的效果。
 
