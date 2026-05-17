@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 
 
@@ -40,3 +40,37 @@ class FEMConfig:
     newton_tol: float = 1.0e-4
     cg_tol: float = 1.0e-6
     hessian_fd_eps: float = 1.0e-4
+
+
+@dataclass(slots=True)
+class ParameterPanelVisibility:
+    # Whole panel
+    show_panel: bool = True
+    # Controls in panel
+    show_paused: bool = True
+    show_implicit_toggle: bool = True
+    show_dt: bool = True
+    show_substeps: bool = True
+    show_damping: bool = True
+    show_youngs: bool = True
+    show_poisson: bool = True
+    show_gravity_y: bool = True
+    show_newton_iters: bool = True
+    show_cg_iters: bool = True
+    show_material_dropdown: bool = True
+    show_material_text: bool = True
+
+
+@dataclass(slots=True)
+class RenderPanelVisibility:
+    # Render options grouped as another panel to avoid hard-coding in gui logic.
+    show_panel: bool = True
+    show_particles: bool = True
+    show_wireframe: bool = True
+    show_lighting: bool = True
+
+
+@dataclass(slots=True)
+class GUIVisibilityConfig:
+    parameters: ParameterPanelVisibility = field(default_factory=ParameterPanelVisibility)
+    render: RenderPanelVisibility = field(default_factory=RenderPanelVisibility)
