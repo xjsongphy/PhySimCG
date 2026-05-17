@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import taichi as ti
+import numpy as np
 
 from lab3.constants import FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
@@ -31,6 +32,44 @@ def _material_index_from_type(material_type: MaterialType) -> int:
     return 2
 
 
+def _to_mat4(m) -> np.ndarray:
+    arr = np.array(m, dtype=np.float32)
+    if arr.size == 16:
+        return arr.reshape(4, 4)
+    return arr
+
+
+def _cursor_ray(window: ti.ui.Window, camera: ti.ui.Camera, aspect: float) -> tuple[np.ndarray, np.ndarray] | None:
+    try:
+        cx, cy = window.get_cursor_pos()
+        x_ndc = 2.0 * cx - 1.0
+        y_ndc = 1.0 - 2.0 * cy
+        # Point on the image plane (near clip) in NDC.
+        clip_near = np.array([x_ndc, y_ndc, -1.0, 1.0], dtype=np.float32)
+
+        proj = _to_mat4(camera.get_projection_matrix(aspect))
+        view = _to_mat4(camera.get_view_matrix())
+        inv_vp = np.linalg.inv(proj @ view)
+        near_h = inv_vp @ clip_near
+        if abs(near_h[3]) < 1.0e-8:
+            return None
+        near_world = near_h[:3] / near_h[3]
+
+        inv_view = np.linalg.inv(view)
+        eye_h = inv_view @ np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        if abs(eye_h[3]) < 1.0e-8:
+            return None
+        origin = eye_h[:3] / eye_h[3]
+        direction = near_world - origin
+        n = np.linalg.norm(direction)
+        if n < 1.0e-8:
+            return None
+        direction /= n
+        return origin.astype(np.float32), direction.astype(np.float32)
+    except Exception:
+        return None
+
+
 def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GUIVisibilityConfig | None = None) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -48,6 +87,7 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
     show_particles = True
     show_wireframe = True
     show_lighting = True
+    prev_lmb = False
 
     while window.running:
         if window.get_event(ti.ui.PRESS):
@@ -123,9 +163,17 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
                 if r.show_lighting:
                     show_lighting = g.checkbox("Lighting", show_lighting)
 
-        # Interaction API placeholders
-        # if window.is_pressed(ti.ui.LMB): system.begin_drag(...), system.drag_to(...)
-        # else: system.end_drag()
+        # Interaction: pick vertex by ray-sphere test, drag to apply spring force.
+        lmb = window.is_pressed(ti.ui.LMB)
+        aspect = 1400.0 / 900.0
+        ray = _cursor_ray(window, camera, aspect)
+        if lmb and not prev_lmb and ray is not None:
+            system.begin_drag(ray[0], ray[1])
+        if lmb and ray is not None:
+            system.drag_to(ray[0], ray[1])
+        if (not lmb) and prev_lmb:
+            system.end_drag()
+        prev_lmb = lmb
 
         if not paused:
             solver.step()
@@ -144,4 +192,3 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
 
         canvas.scene(scene)
         window.show()
-
