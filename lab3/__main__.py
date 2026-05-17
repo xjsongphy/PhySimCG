@@ -3,6 +3,7 @@ import importlib
 
 DEMOS = {
     "basic": "lab3.demos.basic",
+    "b1": "lab3.demos.b1",
 }
 
 
