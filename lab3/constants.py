@@ -8,6 +8,13 @@ class MaterialType(IntEnum):
     COROTATED = 2
 
 
+class ConstraintMode(IntEnum):
+    TOP = 0
+    SIDE_X_MIN = 1
+    SIDE_X_BOTH = 2
+    TOP_BOTTOM = 3
+
+
 @dataclass(slots=True)
 class FEMConfig:
     # Time integration
@@ -32,6 +39,7 @@ class FEMConfig:
 
     # Boundary condition: pin top layer by default
     pin_top_layer: bool = True
+    constraint_mode: ConstraintMode = ConstraintMode.TOP
 
     # Solver control
     use_implicit: bool = False
@@ -40,6 +48,13 @@ class FEMConfig:
     newton_tol: float = 1.0e-4
     cg_tol: float = 1.0e-6
     hessian_fd_eps: float = 1.0e-4
+
+    # Collision (B3) - stage 1: config only, default disabled.
+    enable_collision: bool = False
+    collision_k: float = 2.0e4
+    collision_c: float = 80.0
+    collision_particle_radius: float = 0.06
+    collision_iters: int = 1
 
 
 @dataclass(slots=True)

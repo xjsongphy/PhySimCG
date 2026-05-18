@@ -1,7 +1,8 @@
 import numpy as np
 import taichi as ti
 
-from lab3.constants import FEMConfig
+from lab3.collision import CollisionWorld
+from lab3.constants import ConstraintMode, FEMConfig
 from lab3.mesh import build_box_tet_mesh, extract_unique_edges
 from lab3.models import corotated_first_piola, neo_hookean_first_piola, stvk_first_piola
 
@@ -28,6 +29,7 @@ class FEMSystem:
         self.dm_inv = ti.Matrix.field(3, 3, dtype=ti.f32, shape=self.num_tets)
         self.rest_volume = ti.field(dtype=ti.f32, shape=self.num_tets)
         self.edge_indices = ti.field(dtype=ti.i32, shape=self.num_edges * 2)
+        self.line_points = ti.Vector.field(3, dtype=ti.f32, shape=self.num_edges * 2)
         self.drag_vertex_idx = ti.field(dtype=ti.i32, shape=())
         self.drag_force = ti.Vector.field(3, dtype=ti.f32, shape=())
         self.drag_vertex_idx[None] = -1
@@ -37,8 +39,10 @@ class FEMSystem:
         self.drag_damping = 25.0
         self.pick_radius = 0.18
         self._drag_t = 0.0
+        self.collision_world: CollisionWorld | None = None
 
         self._init_from_numpy(points, tets, edges)
+        self._rest_positions_np = self.x.to_numpy()
 
     def _init_from_numpy(self, points: np.ndarray, tets: np.ndarray, edges: np.ndarray) -> None:
         self.x.from_numpy(points)
@@ -81,10 +85,26 @@ class FEMSystem:
         flat_edges = edges.reshape(-1)
         self.edge_indices.from_numpy(flat_edges)
 
-        if self.config.pin_top_layer:
-            y_max = points[:, 1].max()
-            pinned = np.isclose(points[:, 1], y_max, atol=1.0e-6).astype(np.int32)
-            self.fixed.from_numpy(pinned)
+        self._apply_constraint_mode(points, self.config.constraint_mode)
+
+    def _apply_constraint_mode(self, points: np.ndarray, mode: ConstraintMode) -> None:
+        x = points[:, 0]
+        y = points[:, 1]
+        x_min, x_max = x.min(), x.max()
+        y_min, y_max = y.min(), y.max()
+        tol = 1.0e-6
+        pinned = np.zeros(points.shape[0], dtype=np.int32)
+        if mode == ConstraintMode.TOP:
+            pinned[np.isclose(y, y_max, atol=tol)] = 1
+        elif mode == ConstraintMode.SIDE_X_MIN:
+            pinned[np.isclose(x, x_min, atol=tol)] = 1
+        elif mode == ConstraintMode.SIDE_X_BOTH:
+            pinned[np.isclose(x, x_min, atol=tol) | np.isclose(x, x_max, atol=tol)] = 1
+        elif mode == ConstraintMode.TOP_BOTTOM:
+            pinned[np.isclose(y, y_min, atol=tol) | np.isclose(y, y_max, atol=tol)] = 1
+        else:
+            pinned[np.isclose(y, y_max, atol=tol)] = 1
+        self.fixed.from_numpy(pinned)
 
     @ti.kernel
     def clear_forces(self):
@@ -151,6 +171,14 @@ class FEMSystem:
         if idx >= 0 and self.fixed[idx] == 0:
             self.f[idx] += self.drag_force[None]
 
+    @ti.kernel
+    def build_line_points(self):
+        for e in range(self.num_edges):
+            i0 = self.edge_indices[2 * e]
+            i1 = self.edge_indices[2 * e + 1]
+            self.line_points[2 * e] = self.x[i0]
+            self.line_points[2 * e + 1] = self.x[i1]
+
     # Interaction placeholder interfaces (to be implemented later)
     def begin_drag(self, ray_origin, ray_dir) -> None:
         origin = np.asarray(ray_origin, dtype=np.float32)
@@ -213,6 +241,68 @@ class FEMSystem:
     def end_drag(self) -> None:
         self.drag_vertex_idx[None] = -1
         self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+    def set_constraint_mode(self, mode: ConstraintMode) -> None:
+        self.config.constraint_mode = mode
+        self._apply_constraint_mode(self._rest_positions_np, mode)
+        self.end_drag()
+
+    def reset_state(self) -> None:
+        self.x.from_numpy(self._rest_positions_np)
+        self.v.fill(0.0)
+        self.f.fill(0.0)
+        self.end_drag()
+
+    def set_collision_world(self, world: CollisionWorld | None) -> None:
+        self.collision_world = world
+
+    def add_collision_forces(self) -> None:
+        if not self.config.enable_collision or self.collision_world is None:
+            return
+        x_np = self.x.to_numpy()
+        v_np = self.v.to_numpy()
+        f_np = self.f.to_numpy()
+        fixed_np = self.fixed.to_numpy()
+        k = float(self.config.collision_k)
+        c = float(self.config.collision_c)
+        pr = float(self.config.collision_particle_radius)
+        iters = max(1, int(self.config.collision_iters))
+
+        for _ in range(iters):
+            for i in range(self.num_vertices):
+                if fixed_np[i] == 1:
+                    continue
+                xi = x_np[i]
+                vi = v_np[i]
+
+                for col in self.collision_world.planes:
+                    if not col.enabled:
+                        continue
+                    hit, n, depth = col.query(xi, pr)
+                    if hit:
+                        vn = float(np.dot(vi, n))
+                        damp = -c * min(vn, 0.0)
+                        f_np[i] += (k * depth + damp) * n
+
+                for col in self.collision_world.spheres:
+                    if not col.enabled:
+                        continue
+                    hit, n, depth = col.query(xi, pr)
+                    if hit:
+                        vn = float(np.dot(vi, n))
+                        damp = -c * min(vn, 0.0)
+                        f_np[i] += (k * depth + damp) * n
+
+                for col in self.collision_world.aabbs:
+                    if not col.enabled:
+                        continue
+                    hit, n, depth = col.query(xi, pr)
+                    if hit:
+                        vn = float(np.dot(vi, n))
+                        damp = -c * min(vn, 0.0)
+                        f_np[i] += (k * depth + damp) * n
+
+        self.f.from_numpy(f_np.astype(np.float32))
 
     # --- NumPy bridge for implicit solver ---
     def get_positions_numpy(self) -> np.ndarray:

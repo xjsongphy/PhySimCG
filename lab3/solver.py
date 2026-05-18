@@ -44,8 +44,11 @@ class ExplicitFEMSolver(BaseFEMSolver):
             int(self.model.model_type.value), self.model.mu, self.model.lmbda
         )
         self.system.add_drag_force()
+        if hasattr(self.system, "add_collision_forces"):
+            self.system.add_collision_forces()
         self.system.integrate_explicit(self.config.dt, self.config.damping)
-        self.system.apply_ground_plane(0.0, 0.0)
+        if not self.config.enable_collision:
+            self.system.apply_ground_plane(0.0, 0.0)
 
     def step(self) -> None:
         self.sync_material_from_config()
