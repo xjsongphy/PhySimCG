@@ -4,6 +4,8 @@ import importlib
 DEMOS = {
     "basic": "lab3.demos.basic",
     "b1": "lab3.demos.b1",
+    "b2": "lab3.demos.b2",
+    "b3": "lab3.demos.b3",
 }
 
 
