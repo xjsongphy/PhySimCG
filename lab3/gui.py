@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import taichi as ti
 import numpy as np
+import time
 
 from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
@@ -103,8 +104,17 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
     prev_cursor_y = 0.0
     dragging_point = False
     constraint_idx = int(cfg.constraint_mode.value)
+    target_fps = 120.0
+    frame_dt = 1.0 / target_fps
+    last_frame_t = time.perf_counter()
 
     while window.running:
+        now_t = time.perf_counter()
+        elapsed = now_t - last_frame_t
+        if elapsed < frame_dt:
+            time.sleep(frame_dt - elapsed)
+        last_frame_t = time.perf_counter()
+
         if window.get_event(ti.ui.PRESS):
             if window.event.key == ti.ui.SPACE:
                 paused = not paused
@@ -128,6 +138,7 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
             if new_constraint_idx != constraint_idx:
                 constraint_idx = int(new_constraint_idx)
                 system.set_constraint_mode(ConstraintMode(constraint_idx))
+                system.reset_state()
             g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
 
         # --- Controls panel ---
