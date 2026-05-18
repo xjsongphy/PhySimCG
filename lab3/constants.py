@@ -61,6 +61,10 @@ class FEMConfig:
     builtin_ground_y: float = 0.0
     builtin_ground_restitution: float = 0.0
 
+    # Cloth bending (B2/B3 cloth): simple edge-based bending regularization
+    cloth_bend_k: float = 120.0
+    cloth_bend_damping: float = 2.0
+
 
 @dataclass(slots=True)
 class ParameterPanelVisibility:

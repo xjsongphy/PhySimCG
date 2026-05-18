@@ -7,6 +7,7 @@ wheels/
 *.egg-info
 
 taichi
+TODO.md
 
 # Virtual environments
 .venv

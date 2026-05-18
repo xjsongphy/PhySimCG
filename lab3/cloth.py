@@ -36,11 +36,21 @@ def _build_cloth_mesh(nx: int, ny: int, sx: float, sy: float):
             edge_set.add((i, j) if i < j else (j, i))
     edges = np.array(sorted(edge_set), dtype=np.int32)
 
+    bend_edges = []
+    # 2-hop grid edges for simple bending stiffness
+    for j in range(ny + 1):
+        for i in range(nx + 1):
+            if i + 2 <= nx:
+                bend_edges.append([vid(i, j), vid(i + 2, j)])
+            if j + 2 <= ny:
+                bend_edges.append([vid(i, j), vid(i, j + 2)])
+
     return (
         np.asarray(points, dtype=np.float32),
         np.asarray(uv, dtype=np.float32),
         np.asarray(tris, dtype=np.int32),
         edges,
+        np.asarray(bend_edges, dtype=np.int32),
     )
 
 
@@ -48,11 +58,12 @@ def _build_cloth_mesh(nx: int, ny: int, sx: float, sy: float):
 class ClothSystem:
     def __init__(self, config: FEMConfig, nx: int = 24, ny: int = 24, sx: float = 2.0, sy: float = 2.0):
         self.config = config
-        points, uv, tris, edges = _build_cloth_mesh(nx, ny, sx, sy)
+        points, uv, tris, edges, bend_edges = _build_cloth_mesh(nx, ny, sx, sy)
 
         self.num_vertices = points.shape[0]
         self.num_tris = tris.shape[0]
         self.num_edges = edges.shape[0]
+        self.num_bend_edges = bend_edges.shape[0]
 
         self.x = ti.Vector.field(3, dtype=ti.f32, shape=self.num_vertices)
         self.v = ti.Vector.field(3, dtype=ti.f32, shape=self.num_vertices)
@@ -65,6 +76,8 @@ class ClothSystem:
         self.dm_inv = ti.Matrix.field(2, 2, dtype=ti.f32, shape=self.num_tris)
         self.rest_area = ti.field(dtype=ti.f32, shape=self.num_tris)
         self.edge_indices = ti.field(dtype=ti.i32, shape=self.num_edges * 2)
+        self.bend_edges = ti.Vector.field(2, dtype=ti.i32, shape=self.num_bend_edges)
+        self.bend_rest_len = ti.field(dtype=ti.f32, shape=self.num_bend_edges)
         self.line_points = ti.Vector.field(3, dtype=ti.f32, shape=self.num_edges * 2)
 
         self.drag_vertex_idx = ti.field(dtype=ti.i32, shape=())
@@ -77,12 +90,12 @@ class ClothSystem:
         self._drag_t = 0.0
         self.collision_world: CollisionWorld | None = None
 
-        self._init_from_numpy(points, uv, tris, edges, nx, ny)
+        self._init_from_numpy(points, uv, tris, edges, bend_edges, nx, ny)
         self._rest_positions_np = self.x.to_numpy()
         self._nx = nx
         self._ny = ny
 
-    def _init_from_numpy(self, points, uv, tris, edges, nx, ny):
+    def _init_from_numpy(self, points, uv, tris, edges, bend_edges, nx, ny):
         self.x.from_numpy(points)
         self.v.fill(0.0)
         self.f.fill(0.0)
@@ -117,6 +130,12 @@ class ClothSystem:
         inv[mask] = 1.0 / masses[mask]
         self.inv_mass.from_numpy(inv)
         self.edge_indices.from_numpy(edges.reshape(-1))
+        self.bend_edges.from_numpy(bend_edges)
+        if self.num_bend_edges > 0:
+            p0 = points[bend_edges[:, 0]]
+            p1 = points[bend_edges[:, 1]]
+            rest = np.linalg.norm(p1 - p0, axis=1).astype(np.float32)
+            self.bend_rest_len.from_numpy(rest)
 
         self._apply_constraint_mode(points, nx, ny, self.config.constraint_mode)
 
@@ -179,6 +198,30 @@ class ClothSystem:
         idx = self.drag_vertex_idx[None]
         if idx >= 0 and self.fixed[idx] == 0:
             self.f[idx] += self.drag_force[None]
+
+    @ti.kernel
+    def add_bending_forces(self, bend_k: ti.f32, bend_damping: ti.f32):
+        for e in range(self.num_bend_edges):
+            i0 = self.bend_edges[e][0]
+            i1 = self.bend_edges[e][1]
+            if self.fixed[i0] == 1 and self.fixed[i1] == 1:
+                continue
+            x0 = self.x[i0]
+            x1 = self.x[i1]
+            d = x1 - x0
+            l = d.norm() + 1.0e-8
+            n = d / l
+            stretch = l - self.bend_rest_len[e]
+            rel_v = self.v[i1] - self.v[i0]
+            vn = rel_v.dot(n)
+            fmag = bend_k * stretch + bend_damping * vn
+            fvec = fmag * n
+            if self.fixed[i0] == 0:
+                for c in ti.static(range(3)):
+                    ti.atomic_add(self.f[i0][c], fvec[c])
+            if self.fixed[i1] == 0:
+                for c in ti.static(range(3)):
+                    ti.atomic_add(self.f[i1][c], -fvec[c])
 
     @ti.kernel
     def integrate_explicit(self, dt: ti.f32, damping: ti.f32):

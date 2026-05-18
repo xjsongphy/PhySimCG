@@ -43,6 +43,9 @@ class ExplicitFEMSolver(BaseFEMSolver):
         self.system.accumulate_internal_forces(
             int(self.model.model_type.value), self.model.mu, self.model.lmbda
         )
+        if hasattr(self.system, "add_bending_forces"):
+            if self.config.cloth_bend_k > 0.0:
+                self.system.add_bending_forces(self.config.cloth_bend_k, self.config.cloth_bend_damping)
         self.system.add_drag_force()
         if hasattr(self.system, "add_collision_forces"):
             self.system.add_collision_forces()
