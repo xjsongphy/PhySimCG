@@ -47,38 +47,80 @@ def _to_mat4(m) -> np.ndarray:
     return arr
 
 
-def _cursor_ray(window: ti.ui.Window, camera: ti.ui.Camera, aspect: float) -> tuple[np.ndarray, np.ndarray] | None:
-    try:
-        cx, cy = window.get_cursor_pos()
-        x_ndc = 2.0 * cx - 1.0
-        y_ndc = 1.0 - 2.0 * cy
-        # Point on the image plane (near clip) in NDC.
-        clip_near = np.array([x_ndc, y_ndc, -1.0, 1.0], dtype=np.float32)
+def _camera_basis(cam_pos: np.ndarray, cam_target: np.ndarray):
+    forward = cam_target - cam_pos
+    forward_n = forward / (np.linalg.norm(forward) + 1.0e-8)
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    if abs(forward_n[1]) > 0.99:
+        world_up = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    right = np.cross(forward_n, world_up)
+    right = right / (np.linalg.norm(right) + 1.0e-8)
+    up = np.cross(right, forward_n)
+    return forward_n, right, up
 
-        proj = _to_mat4(camera.get_projection_matrix(aspect))
-        view = _to_mat4(camera.get_view_matrix())
-        inv_vp = np.linalg.inv(proj @ view)
-        near_h = inv_vp @ clip_near
-        if abs(near_h[3]) < 1.0e-8:
-            return None
-        near_world = near_h[:3] / near_h[3]
 
-        inv_view = np.linalg.inv(view)
-        eye_h = inv_view @ np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-        if abs(eye_h[3]) < 1.0e-8:
-            return None
-        origin = eye_h[:3] / eye_h[3]
-        direction = near_world - origin
-        n = np.linalg.norm(direction)
-        if n < 1.0e-8:
-            return None
-        direction /= n
-        return origin.astype(np.float32), direction.astype(np.float32)
-    except Exception:
+def _cursor_ray_from_camera(
+    cx: float,
+    cy: float,
+    cam_pos: np.ndarray,
+    cam_target: np.ndarray,
+    cam_dist: float,
+    aspect: float,
+    fov_deg: float = 60.0,
+):
+    forward_n, right, up = _camera_basis(cam_pos, cam_target)
+    fov = np.radians(fov_deg)
+    half_h = cam_dist * np.tan(fov * 0.5)
+    half_w = half_h * aspect
+    ndc_x = 2.0 * cx - 1.0
+    ndc_y = 1.0 - 2.0 * cy
+    pt = cam_target + ndc_x * half_w * right + ndc_y * half_h * up
+    ray_dir = pt - cam_pos
+    ray_dir /= (np.linalg.norm(ray_dir) + 1.0e-8)
+    return cam_pos.astype(np.float32), ray_dir.astype(np.float32)
+
+
+def _project_to_screen(
+    p_world: np.ndarray,
+    cam_pos: np.ndarray,
+    cam_target: np.ndarray,
+    aspect: float,
+    fov_deg: float = 60.0,
+):
+    forward_n, right, up = _camera_basis(cam_pos, cam_target)
+    to_p = p_world - cam_pos
+    depth = float(np.dot(to_p, forward_n))
+    if depth <= 1.0e-6:
         return None
+    fov = np.radians(fov_deg)
+    hh = depth * np.tan(fov * 0.5)
+    hw = hh * aspect
+    sx = (np.dot(to_p, right) / (hw + 1.0e-8) + 1.0) * 0.5
+    sy = (1.0 - np.dot(to_p, up) / (hh + 1.0e-8)) * 0.5
+    return float(sx), float(sy), depth
 
 
-def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GUIVisibilityConfig | None = None) -> None:
+def _cursor_over_gui(cx: float, cy: float) -> bool:
+    # Scene panel
+    if 0.02 <= cx <= 0.26 and 0.02 <= cy <= 0.28:
+        return True
+    # Controls panel
+    if 0.02 <= cx <= 0.28 and 0.20 <= cy <= 0.76:
+        return True
+    # Render panel
+    if 0.30 <= cx <= 0.48 and 0.02 <= cy <= 0.22:
+        return True
+    return False
+
+
+def run_gui(
+    system: FEMSystem,
+    solver: BaseFEMSolver,
+    cfg: FEMConfig,
+    ui_cfg: GUIVisibilityConfig | None = None,
+    mesh_presets: dict[str, dict] | None = None,
+    rebuild_sim=None,
+) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
 
@@ -104,6 +146,7 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
     prev_cursor_y = 0.0
     dragging_point = False
     constraint_idx = int(cfg.constraint_mode.value)
+    current_mesh_name = next(iter(mesh_presets.keys())) if mesh_presets else ""
     target_fps = 120.0
     frame_dt = 1.0 / target_fps
     last_frame_t = time.perf_counter()
@@ -140,6 +183,14 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
                 system.set_constraint_mode(ConstraintMode(constraint_idx))
                 system.reset_state()
             g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
+            if mesh_presets and rebuild_sim is not None:
+                g.text("Mesh:")
+                g.text(f"Current: {current_mesh_name}")
+                for name in mesh_presets.keys():
+                    if g.button(name):
+                        current_mesh_name = name
+                        system, solver = rebuild_sim(name)
+                        constraint_idx = int(cfg.constraint_mode.value)
 
         # --- Controls panel ---
         p = ui_cfg.parameters
@@ -205,14 +256,31 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
         cx, cy = window.get_cursor_pos()
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
-        over_gui = (cx < 0.50)
-        aspect = 1400.0 / 900.0
-        ray = _cursor_ray(window, camera, aspect)
+        over_gui = _cursor_over_gui(cx, cy)
+        ws = window.get_window_shape()
+        aspect = float(ws[0]) / max(float(ws[1]), 1.0)
+        ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, cam_dist, aspect, fov_deg=60.0)
 
         # LMB: pick/drag point if hit, otherwise pan camera.
         if lmb and not prev_lmb and not over_gui and ray is not None:
             system.begin_drag(ray[0], ray[1])
             dragging_point = int(system.drag_vertex_idx[None]) >= 0
+            if not dragging_point:
+                x_np = system.x.to_numpy()
+                best_i = -1
+                best_dist = 1e9
+                for i in range(x_np.shape[0]):
+                    proj = _project_to_screen(x_np[i], cam_pos, cam_target, aspect, fov_deg=60.0)
+                    if proj is None:
+                        continue
+                    sx, sy, depth = proj
+                    d = np.hypot(sx - cx, sy - cy)
+                    if d < max(0.02, 0.12 / max(depth, 1e-6)) and d < best_dist:
+                        best_dist = d
+                        best_i = i
+                if best_i >= 0 and hasattr(system, "begin_drag_vertex"):
+                    system.begin_drag_vertex(best_i, ray[0], ray[1])
+                    dragging_point = int(system.drag_vertex_idx[None]) >= 0
         if lmb and dragging_point and ray is not None:
             system.drag_to(ray[0], ray[1])
         if (not lmb) and prev_lmb:

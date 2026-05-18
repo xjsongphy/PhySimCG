@@ -98,3 +98,57 @@ class RenderPanelVisibility:
 class GUIVisibilityConfig:
     parameters: ParameterPanelVisibility = field(default_factory=ParameterPanelVisibility)
     render: RenderPanelVisibility = field(default_factory=RenderPanelVisibility)
+
+
+@dataclass(slots=True)
+class SoftBodyDefaults:
+    gravity: tuple[float, float, float] = (0.0, -0.05, 0.0)
+    density: float = 400.0
+    youngs_modulus: float = 2.0e4
+    poisson_ratio: float = 0.2
+    damping: float = 0.995
+    dt: float = 1.0e-3
+    substeps: int = 5
+
+    def make_config(self, **overrides) -> FEMConfig:
+        cfg = FEMConfig(
+            gravity=self.gravity,
+            density=self.density,
+            youngs_modulus=self.youngs_modulus,
+            poisson_ratio=self.poisson_ratio,
+            damping=self.damping,
+            dt=self.dt,
+            substeps=self.substeps,
+        )
+        for k, v in overrides.items():
+            setattr(cfg, k, v)
+        return cfg
+
+
+@dataclass(slots=True)
+class ClothDefaults:
+    gravity: tuple[float, float, float] = (0.0, -9.8, 0.0)
+    density: float = 0.5
+    youngs_modulus: float = 50.0
+    poisson_ratio: float = 0.3
+    damping: float = 0.995
+    dt: float = 1.0e-3
+    substeps: int = 2
+    cloth_bend_k: float = 120.0
+    cloth_bend_damping: float = 2.0
+
+    def make_config(self, **overrides) -> FEMConfig:
+        cfg = FEMConfig(
+            gravity=self.gravity,
+            density=self.density,
+            youngs_modulus=self.youngs_modulus,
+            poisson_ratio=self.poisson_ratio,
+            damping=self.damping,
+            dt=self.dt,
+            substeps=self.substeps,
+            cloth_bend_k=self.cloth_bend_k,
+            cloth_bend_damping=self.cloth_bend_damping,
+        )
+        for k, v in overrides.items():
+            setattr(cfg, k, v)
+        return cfg

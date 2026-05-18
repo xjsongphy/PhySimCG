@@ -220,6 +220,27 @@ class FEMSystem:
         if hit_idx >= 0:
             _ = v_np  # keep local for future interaction extensions
 
+    def begin_drag_vertex(self, vertex_idx: int, ray_origin, ray_dir) -> None:
+        if vertex_idx < 0 or vertex_idx >= self.num_vertices:
+            self.drag_vertex_idx[None] = -1
+            self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            return
+        origin = np.asarray(ray_origin, dtype=np.float32)
+        direction = np.asarray(ray_dir, dtype=np.float32)
+        n = np.linalg.norm(direction)
+        if n < 1.0e-8:
+            self.drag_vertex_idx[None] = -1
+            self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            return
+        direction /= n
+        x_np = self.x.to_numpy()
+        t = float(np.dot(x_np[vertex_idx] - origin, direction))
+        if t < 0.0:
+            t = float(np.linalg.norm(x_np[vertex_idx] - origin))
+        self.drag_vertex_idx[None] = int(vertex_idx)
+        self._drag_t = t
+        self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
     def drag_to(self, ray_origin, ray_dir) -> None:
         idx = int(self.drag_vertex_idx[None])
         if idx < 0:

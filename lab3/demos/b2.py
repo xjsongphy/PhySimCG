@@ -1,7 +1,7 @@
 import taichi as ti
 
 from lab3.cloth import ClothSystem
-from lab3.constants import FEMConfig, GUIVisibilityConfig, MaterialType
+from lab3.constants import ClothDefaults, GUIVisibilityConfig, MaterialType
 from lab3.gui import run_gui
 from lab3.solver import ExplicitFEMSolver
 
@@ -10,19 +10,22 @@ def run(debug: bool = False):
     _ = debug
     ti.init(arch=ti.gpu)
 
-    config = FEMConfig(
-        gravity=(0.0, -9.8, 0.0),
-        density=0.5,
-        youngs_modulus=50.0,
-        poisson_ratio=0.3,
+    defaults = ClothDefaults()
+    config = defaults.make_config(
         material_type=MaterialType.STVK,
         use_implicit=False,
-        substeps=2,
-        dt=1.0e-3,
-        damping=0.995,
     )
-    system = ClothSystem(config=config, nx=28, ny=28, sx=2.0, sy=2.0)
-    solver = ExplicitFEMSolver(system, config)
+    mesh_presets = {
+        "Low": {"nx": 16, "ny": 16},
+        "Med": {"nx": 24, "ny": 24},
+        "High": {"nx": 32, "ny": 32},
+    }
+
+    def _rebuild(name: str):
+        p = mesh_presets[name]
+        s = ClothSystem(config=config, nx=p["nx"], ny=p["ny"], sx=2.0, sy=2.0)
+        so = ExplicitFEMSolver(s, config)
+        return s, so
 
     ui_cfg = GUIVisibilityConfig()
     ui_cfg.parameters.show_implicit_toggle = False
@@ -32,9 +35,9 @@ def run(debug: bool = False):
     ui_cfg.parameters.show_material_dropdown = False
     ui_cfg.parameters.show_material_text = False
 
-    run_gui(system, solver, config, ui_cfg=ui_cfg)
+    system, solver = _rebuild("Med")
+    run_gui(system, solver, config, ui_cfg=ui_cfg, mesh_presets=mesh_presets, rebuild_sim=_rebuild)
 
 
 if __name__ == "__main__":
     run()
-
