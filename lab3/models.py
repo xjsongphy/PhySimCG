@@ -59,3 +59,12 @@ def corotated_first_piola(F, mu, lmbda):
     FinvT = F.inverse().transpose()
     # Common robust corotated force form
     return 2.0 * mu * (F - R) + lmbda * (J - 1.0) * J * FinvT
+
+
+@ti.func
+def stvk_first_piola_tri(F, mu, lmbda):
+    I2 = ti.Matrix.identity(ti.f32, 2)
+    G = 0.5 * (F.transpose() @ F - I2)
+    trG = G.trace()
+    S = 2.0 * mu * G + lmbda * trG * I2
+    return F @ S
