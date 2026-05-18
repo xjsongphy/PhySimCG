@@ -47,8 +47,8 @@ class ExplicitFEMSolver(BaseFEMSolver):
         if hasattr(self.system, "add_collision_forces"):
             self.system.add_collision_forces()
         self.system.integrate_explicit(self.config.dt, self.config.damping)
-        if not self.config.enable_collision:
-            self.system.apply_ground_plane(0.0, 0.0)
+        if self.config.enable_builtin_ground:
+            self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)
 
     def step(self) -> None:
         self.sync_material_from_config()
@@ -155,4 +155,5 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
 
         self.system.set_positions_numpy(x)
         self.system.set_velocities_numpy(v_new)
-        self.system.apply_ground_plane(0.0, 0.0)
+        if self.config.enable_builtin_ground:
+            self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)

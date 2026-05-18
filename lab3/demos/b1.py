@@ -11,7 +11,7 @@ def run(debug: bool = False):
     ti.init(arch=ti.gpu)
 
     config = FEMConfig(
-        gravity=(0.0, -0.05, 0.0),
+        gravity=(0.0, -9.8, 0.0),
         use_implicit=False,
         substeps=5,
         dt=1.0e-3,
@@ -30,4 +30,3 @@ def run(debug: bool = False):
 
 if __name__ == "__main__":
     run()
-

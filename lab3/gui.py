@@ -3,13 +3,20 @@ from __future__ import annotations
 import taichi as ti
 import numpy as np
 
-from lab3.constants import FEMConfig, GUIVisibilityConfig, MaterialType
+from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
 from lab3.models import CorotatedModel, NeoHookeanModel, StVKModel
 from lab3.solver import BaseFEMSolver, ExplicitFEMSolver, ImplicitNewtonCGSolver
 
 
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
+_CONSTRAINT_NAMES = ["Top Fixed", "Side Fixed", "Both Sides Fixed", "Top+Bottom Fixed"]
+_CONSTRAINT_DESC = {
+    0: "Top fixed, rest free.",
+    1: "Single x-min side fixed, body can bend.",
+    2: "Both x sides fixed, middle deforms.",
+    3: "Top and bottom fixed, middle layer is freer.",
+}
 
 
 def _rebuild_model_from_ui(solver: BaseFEMSolver, cfg: FEMConfig, material_name: str) -> None:
@@ -78,9 +85,11 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
     canvas = window.get_canvas()
     scene = window.get_scene()
     camera = ti.ui.Camera()
-    camera.position(9.0, 5.0, 12.0)
-    camera.lookat(4.0, 1.0, 1.0)
-    camera.up(0.0, 1.0, 0.0)
+    cam_target = np.array([4.0, 1.0, 1.0], dtype=np.float32)
+    cam_yaw = -1.1
+    cam_pitch = 0.25
+    cam_dist = 11.0
+    cam_pos = np.array([9.0, 5.0, 12.0], dtype=np.float32)
 
     paused = False
     material_name = _MATERIAL_NAMES[_material_index_from_type(cfg.material_type)]
@@ -88,6 +97,12 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
     show_wireframe = True
     show_lighting = True
     prev_lmb = False
+    prev_rmb = False
+    prev_cursor_valid = False
+    prev_cursor_x = 0.0
+    prev_cursor_y = 0.0
+    dragging_point = False
+    constraint_idx = int(cfg.constraint_mode.value)
 
     while window.running:
         if window.get_event(ti.ui.PRESS):
@@ -97,10 +112,23 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
         gui = window.get_gui()
 
         # --- Scene panel ---
-        with gui.sub_window("Scene", 0.02, 0.02, 0.22, 0.16) as g:
+        with gui.sub_window("Scene", 0.02, 0.02, 0.24, 0.26) as g:
             g.text("=== Scene ===")
             g.text("RMB + drag: camera")
+            g.text("LMB hit point: drag force")
+            g.text("LMB empty: camera pan")
             g.text("SPACE: pause/resume")
+            if g.button("Reset Sim"):
+                system.reset_state()
+            g.text("Constraint:")
+            new_constraint_idx = constraint_idx
+            for i, name in enumerate(_CONSTRAINT_NAMES):
+                if g.button(name):
+                    new_constraint_idx = i
+            if new_constraint_idx != constraint_idx:
+                constraint_idx = int(new_constraint_idx)
+                system.set_constraint_mode(ConstraintMode(constraint_idx))
+            g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
 
         # --- Controls panel ---
         p = ui_cfg.parameters
@@ -137,12 +165,11 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
 
                 if p.show_material_dropdown:
                     current_idx = _material_index_from_type(cfg.material_type)
-                    if hasattr(panel, "dropdown"):
-                        selected_idx = panel.dropdown("Material", current_idx, _MATERIAL_NAMES)
-                    elif hasattr(panel, "combo"):
-                        selected_idx = panel.combo("Material", current_idx, _MATERIAL_NAMES)
-                    else:
-                        selected_idx = panel.slider_int("Material", current_idx, 0, len(_MATERIAL_NAMES) - 1)
+                    selected_idx = current_idx
+                    panel.text("Material:")
+                    for i, name in enumerate(_MATERIAL_NAMES):
+                        if panel.button(name):
+                            selected_idx = i
                     selected_name = _MATERIAL_NAMES[selected_idx]
                     if selected_name != material_name:
                         material_name = selected_name
@@ -164,21 +191,59 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
                     show_lighting = g.checkbox("Lighting", show_lighting)
 
         # Interaction: pick vertex by ray-sphere test, drag to apply spring force.
+        cx, cy = window.get_cursor_pos()
         lmb = window.is_pressed(ti.ui.LMB)
+        rmb = window.is_pressed(ti.ui.RMB)
+        over_gui = (cx < 0.50)
         aspect = 1400.0 / 900.0
         ray = _cursor_ray(window, camera, aspect)
-        if lmb and not prev_lmb and ray is not None:
+
+        # LMB: pick/drag point if hit, otherwise pan camera.
+        if lmb and not prev_lmb and not over_gui and ray is not None:
             system.begin_drag(ray[0], ray[1])
-        if lmb and ray is not None:
+            dragging_point = int(system.drag_vertex_idx[None]) >= 0
+        if lmb and dragging_point and ray is not None:
             system.drag_to(ray[0], ray[1])
         if (not lmb) and prev_lmb:
             system.end_drag()
+            dragging_point = False
+
+        # Camera controls (lab2-style separation)
+        if prev_cursor_valid:
+            dx_mouse = cx - prev_cursor_x
+            dy_mouse = cy - prev_cursor_y
+            if not over_gui:
+                if rmb:
+                    cam_yaw += dx_mouse * 3.0
+                    cam_pitch -= dy_mouse * 3.0
+                    cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
+                elif lmb and not dragging_point:
+                    forward = cam_target - cam_pos
+                    forward[1] = 0.0
+                    forward /= (np.linalg.norm(forward) + 1e-8)
+                    right_pan = np.array([forward[2], 0.0, -forward[0]], dtype=np.float32)
+                    pan_speed = max(0.2, cam_dist * 0.8)
+                    cam_target += right_pan * (dx_mouse * pan_speed)
+                    cam_target -= np.array([0.0, dy_mouse * pan_speed, 0.0], dtype=np.float32)
+
+        if window.is_pressed("r"):
+            cam_dist = max(0.5, cam_dist - 0.08)
+        if window.is_pressed("f"):
+            cam_dist = min(40.0, cam_dist + 0.08)
+
+        cam_pos[0] = cam_target[0] + cam_dist * np.cos(cam_pitch) * np.cos(cam_yaw)
+        cam_pos[1] = cam_target[1] + cam_dist * np.sin(cam_pitch)
+        cam_pos[2] = cam_target[2] + cam_dist * np.cos(cam_pitch) * np.sin(cam_yaw)
+        camera.position(cam_pos[0], cam_pos[1], cam_pos[2])
+        camera.lookat(cam_target[0], cam_target[1], cam_target[2])
+
         prev_lmb = lmb
+        prev_rmb = rmb
+        prev_cursor_x, prev_cursor_y = cx, cy
+        prev_cursor_valid = True
 
         if not paused:
             solver.step()
-
-        camera.track_user_inputs(window, movement_speed=0.05, hold_key=ti.ui.RMB)
         scene.set_camera(camera)
         if show_lighting:
             scene.point_light(pos=(8, 12, 10), color=(1.0, 1.0, 1.0))
@@ -188,7 +253,8 @@ def run_gui(system: FEMSystem, solver: BaseFEMSolver, cfg: FEMConfig, ui_cfg: GU
         if show_particles:
             scene.particles(system.x, radius=0.05, color=(0.2, 0.7, 1.0))
         if show_wireframe:
-            scene.lines(system.x, width=1.0, indices=system.edge_indices, color=(0.85, 0.85, 0.9))
+            system.build_line_points()
+            scene.lines(system.line_points, width=1.0, color=(0.85, 0.85, 0.9))
 
         canvas.scene(scene)
         window.show()

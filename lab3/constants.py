@@ -56,6 +56,11 @@ class FEMConfig:
     collision_particle_radius: float = 0.06
     collision_iters: int = 1
 
+    # Built-in ground plane (legacy/simple fallback). Disabled by default.
+    enable_builtin_ground: bool = False
+    builtin_ground_y: float = 0.0
+    builtin_ground_restitution: float = 0.0
+
 
 @dataclass(slots=True)
 class ParameterPanelVisibility:
