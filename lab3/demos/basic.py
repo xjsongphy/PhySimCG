@@ -12,18 +12,19 @@ def run(debug: bool = False):
     defaults = SoftBodyDefaults()
     config = defaults.make_config(
         use_implicit=False,
-        substeps=2,  # keep basic faster while using soft-body defaults
     )
     mesh_presets = {
-        "Low": {"wx": 6, "wy": 2, "wz": 2},
-        "Med": {"wx": 8, "wy": 2, "wz": 2},
-        "High": {"wx": 12, "wy": 3, "wz": 3},
+        # Keep physical size fixed at 8x2x2 while increasing density.
+        "Low": {"wx": 8, "wy": 2, "wz": 2, "cell_size": 1.0},
+        "Med": {"wx": 16, "wy": 4, "wz": 4, "cell_size": 0.5},
+        "High": {"wx": 24, "wy": 6, "wz": 6, "cell_size": 1.0 / 3.0},
     }
     config.wx, config.wy, config.wz = (
-        mesh_presets["Med"]["wx"],
-        mesh_presets["Med"]["wy"],
-        mesh_presets["Med"]["wz"],
+        mesh_presets["Low"]["wx"],
+        mesh_presets["Low"]["wy"],
+        mesh_presets["Low"]["wz"],
     )
+    config.cell_size = mesh_presets["Med"]["cell_size"]
     ui_cfg = GUIVisibilityConfig()
     ui_cfg.parameters.show_implicit_toggle = False
     ui_cfg.parameters.show_material_dropdown = False
@@ -33,12 +34,12 @@ def run(debug: bool = False):
 
     def _rebuild(name: str):
         p = mesh_presets[name]
-        config.wx, config.wy, config.wz = p["wx"], p["wy"], p["wz"]
+        config.wx, config.wy, config.wz, config.cell_size = p["wx"], p["wy"], p["wz"], p["cell_size"]
         s = FEMSystem(config)
         so = ImplicitNewtonCGSolver(s, config) if config.use_implicit else ExplicitFEMSolver(s, config)
         return s, so
 
-    system, solver = _rebuild("Med")
+    system, solver = _rebuild("Low")
     run_gui(system, solver, config, ui_cfg=ui_cfg, mesh_presets=mesh_presets, rebuild_sim=_rebuild)
 
 

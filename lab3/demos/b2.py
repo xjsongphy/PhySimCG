@@ -35,7 +35,7 @@ def run(debug: bool = False):
     ui_cfg.parameters.show_material_dropdown = False
     ui_cfg.parameters.show_material_text = False
 
-    system, solver = _rebuild("Med")
+    system, solver = _rebuild("Low")
     run_gui(system, solver, config, ui_cfg=ui_cfg, mesh_presets=mesh_presets, rebuild_sim=_rebuild)
 
 
