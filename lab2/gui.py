@@ -363,6 +363,9 @@ def run_gui(
     prev_cursor_x, prev_cursor_y = 0.0, 0.0
     prev_cursor_valid = False
     prev_lmb = False
+    prev_rmb = False
+    lmb_started_on_blank = False
+    rmb_started_on_blank = False
     drag_target = -1  # sticky obstacle pick — persists while LMB held
 
     # Deferred recreation + debug timers
@@ -573,6 +576,7 @@ def run_gui(
 
         # GUI panels occupy x ≤ 0.40; block camera interaction there
         over_gui = (cx < 0.42)
+        in_window = 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0
 
         # Compute ray from camera through cursor
         forward = cam_target - cam_pos
@@ -591,10 +595,16 @@ def run_gui(
         half_w = half_h * aspect
 
         ndc_x = 2.0 * cx - 1.0
-        ndc_y = 1.0 - 2.0 * cy
+        # Taichi cursor coordinates use lower-left as origin.
+        ndc_y = 2.0 * cy - 1.0
         pt_on_plane = cam_target + ndc_x * half_w * right_cam + ndc_y * half_h * cam_up
         ray_dir = pt_on_plane - cam_pos
         ray_dir = ray_dir / (np.linalg.norm(ray_dir) + 1e-8)
+
+        if lmb and not prev_lmb:
+            lmb_started_on_blank = in_window and (not over_gui)
+        if rmb and not prev_rmb:
+            rmb_started_on_blank = in_window and (not over_gui)
 
         # Obstacle picking: using actual geometry (triangle mesh for box, sphere for sphere)
         # This ensures picking matches rendering exactly
@@ -652,7 +662,7 @@ def run_gui(
                 if hw < 1e-8 or hh < 1e-8:
                     continue
                 sx = (right_dist / hw + 1.0) / 2.0
-                sy = (1.0 - up_dist / hh) / 2.0
+                sy = (up_dist / hh + 1.0) / 2.0
                 dist = np.sqrt((sx - cx) ** 2 + (sy - cy) ** 2)
                 # Obstacle visual radius on screen
                 if sim.obstacle_type[o] == 0:  # sphere
@@ -672,7 +682,7 @@ def run_gui(
                     picked_obs = o
 
         # Obstacle interaction — sticky pick: latch onto obstacle on LMB press, drag until release
-        if lmb and not prev_lmb:
+        if lmb and not prev_lmb and lmb_started_on_blank:
             if picked_obs >= 0:
                 drag_target = picked_obs
                 # Debug: print detailed picking info
@@ -691,6 +701,9 @@ def run_gui(
                         print(f"  Obs {o} ({obs_type_str}): pos=({obs_c[0]:.3f}, {obs_c[1]:.3f}, {obs_c[2]:.3f}) depth={depth:.3f}")
         elif not lmb:
             drag_target = -1
+            lmb_started_on_blank = False
+        if not rmb:
+            rmb_started_on_blank = False
 
         dragging_obs = False
         rotating_obs = False
@@ -732,13 +745,13 @@ def run_gui(
                     sim.obstacle_rotation[drag_target] = q_new
 
         # Camera controls (only when not interacting with obstacle)
-        if prev_cursor_valid and not dragging_obs and not rotating_obs and not over_gui:
-            if rmb:
+        if prev_cursor_valid and not dragging_obs and not rotating_obs and in_window:
+            if rmb and rmb_started_on_blank:
                 cam_yaw += dx_mouse * 3.0
                 cam_pitch -= dy_mouse * 3.0
                 cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
 
-            if lmb and not over_gui:
+            if lmb and lmb_started_on_blank:
                 pan_speed = cam_dist * 0.8
                 pan_x = dx_mouse * pan_speed
                 pan_y = dy_mouse * pan_speed
@@ -765,6 +778,7 @@ def run_gui(
         prev_cursor_x, prev_cursor_y = cx, cy
         prev_cursor_valid = True
         prev_lmb = lmb
+        prev_rmb = rmb
 
         # ==== Animate obstacle ====
         if animate_obstacle and sim.obstacle_count[None] > 0:
