@@ -14,3 +14,7 @@ TODO.md
 
 # MacOS files
 .DS_Store
+
+# Runtime artifacts
+imgui.ini
+lab3/logs/
