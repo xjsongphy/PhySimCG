@@ -108,7 +108,7 @@ class SoftBodyDefaults:
     poisson_ratio: float = 0.2
     damping: float = 0.995
     dt: float = 1.0e-3
-    substeps: int = 8
+    substeps: int = 5
 
     def make_config(self, **overrides) -> FEMConfig:
         cfg = FEMConfig(

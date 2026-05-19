@@ -4,12 +4,13 @@ from lab3.collision import CollisionWorld
 from lab3.constants import GUIVisibilityConfig, SoftBodyDefaults
 from lab3.core import FEMSystem
 from lab3.gui import run_gui
+from lab3.logging_utils import create_lab3_logger
 from lab3.solver import ExplicitFEMSolver
 
 
-def run(debug: bool = False):
-    _ = debug
-    ti.init(arch=ti.gpu)
+def run(debug: bool = False, safe_boot: bool = False):
+    logger = create_lab3_logger(debug)
+    ti.init(arch=ti.cpu if safe_boot else ti.gpu)
 
     defaults = SoftBodyDefaults()
     config = defaults.make_config(
@@ -26,16 +27,21 @@ def run(debug: bool = False):
         "Med": {"wx": 16, "wy": 4, "wz": 4, "cell_size": 0.5},
         "High": {"wx": 24, "wy": 6, "wz": 6, "cell_size": 1.0 / 3.0},
     }
+    if safe_boot:
+        mesh_presets = {"Low": mesh_presets["Low"]}
+        config.substeps = min(config.substeps, 3)
+        logger.warning("Safe boot enabled: using CPU backend, Low mesh only, substeps<=3")
     config.wx, config.wy, config.wz = (
         mesh_presets["Low"]["wx"],
         mesh_presets["Low"]["wy"],
         mesh_presets["Low"]["wz"],
     )
-    config.cell_size = mesh_presets["Med"]["cell_size"]
+    config.cell_size = mesh_presets["Low"]["cell_size"]
 
     def _rebuild(name: str):
         p = mesh_presets[name]
         config.wx, config.wy, config.wz, config.cell_size = p["wx"], p["wy"], p["wz"], p["cell_size"]
+        logger.info("Rebuild b3 mesh=%s wx=%d wy=%d wz=%d", name, config.wx, config.wy, config.wz)
         s = FEMSystem(config)
         w = CollisionWorld()
         # y=0 ground
@@ -57,7 +63,16 @@ def run(debug: bool = False):
     # Keep material selector visible for B3 experimentation.
 
     system, solver = _rebuild("Low")
-    run_gui(system, solver, config, ui_cfg=ui_cfg, mesh_presets=mesh_presets, rebuild_sim=_rebuild)
+    run_gui(
+        system,
+        solver,
+        config,
+        ui_cfg=ui_cfg,
+        mesh_presets=mesh_presets,
+        rebuild_sim=_rebuild,
+        logger=logger,
+        debug=debug,
+    )
 
 
 if __name__ == "__main__":
