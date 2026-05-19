@@ -3,6 +3,7 @@ from __future__ import annotations
 import taichi as ti
 import numpy as np
 import time
+import logging
 
 from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
@@ -12,6 +13,7 @@ from lab3.solver import BaseFEMSolver, ExplicitFEMSolver, ImplicitNewtonCGSolver
 
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
 _CONSTRAINT_NAMES = ["Top Fixed", "Side Fixed", "Both Sides Fixed", "Top+Bottom Fixed"]
+_CAMERA_FOV_DEG = 60.0
 _CONSTRAINT_DESC = {
     0: "Top fixed, rest free.",
     1: "Single x-min side fixed, body can bend.",
@@ -64,18 +66,18 @@ def _cursor_ray_from_camera(
     cy: float,
     cam_pos: np.ndarray,
     cam_target: np.ndarray,
-    cam_dist: float,
     aspect: float,
-    fov_deg: float = 60.0,
+    fov_deg: float = _CAMERA_FOV_DEG,
 ):
     forward_n, right, up = _camera_basis(cam_pos, cam_target)
     fov = np.radians(fov_deg)
-    half_h = cam_dist * np.tan(fov * 0.5)
-    half_w = half_h * aspect
     ndc_x = 2.0 * cx - 1.0
-    ndc_y = 1.0 - 2.0 * cy
-    pt = cam_target + ndc_x * half_w * right + ndc_y * half_h * up
-    ray_dir = pt - cam_pos
+    # Taichi cursor coordinates are window-local with origin at lower-left.
+    ndc_y = 2.0 * cy - 1.0
+    # Reverse of perspective projection: ray in camera basis.
+    # dir = forward + x*tan(fov/2)*aspect*right + y*tan(fov/2)*up
+    t = np.tan(fov * 0.5)
+    ray_dir = forward_n + (ndc_x * aspect * t) * right + (ndc_y * t) * up
     ray_dir /= (np.linalg.norm(ray_dir) + 1.0e-8)
     return cam_pos.astype(np.float32), ray_dir.astype(np.float32)
 
@@ -85,7 +87,7 @@ def _project_to_screen(
     cam_pos: np.ndarray,
     cam_target: np.ndarray,
     aspect: float,
-    fov_deg: float = 60.0,
+    fov_deg: float = _CAMERA_FOV_DEG,
 ):
     forward_n, right, up = _camera_basis(cam_pos, cam_target)
     to_p = p_world - cam_pos
@@ -96,7 +98,8 @@ def _project_to_screen(
     hh = depth * np.tan(fov * 0.5)
     hw = hh * aspect
     sx = (np.dot(to_p, right) / (hw + 1.0e-8) + 1.0) * 0.5
-    sy = (1.0 - np.dot(to_p, up) / (hh + 1.0e-8)) * 0.5
+    # Return to Taichi's lower-left-origin normalized window coordinates.
+    sy = (np.dot(to_p, up) / (hh + 1.0e-8) + 1.0) * 0.5
     return float(sx), float(sy), depth
 
 
@@ -120,6 +123,8 @@ def run_gui(
     ui_cfg: GUIVisibilityConfig | None = None,
     mesh_presets: dict[str, dict] | None = None,
     rebuild_sim=None,
+    logger: logging.Logger | None = None,
+    debug: bool = False,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -144,14 +149,18 @@ def run_gui(
     prev_cursor_valid = False
     prev_cursor_x = 0.0
     prev_cursor_y = 0.0
+    lmb_started_on_blank = False
+    rmb_started_on_blank = False
     dragging_point = False
     constraint_idx = int(cfg.constraint_mode.value)
     current_mesh_name = next(iter(mesh_presets.keys())) if mesh_presets else ""
     target_fps = 120.0
     frame_dt = 1.0 / target_fps
     last_frame_t = time.perf_counter()
+    frame_id = 0
 
     while window.running:
+        frame_begin_t = time.perf_counter()
         now_t = time.perf_counter()
         elapsed = now_t - last_frame_t
         if elapsed < frame_dt:
@@ -161,6 +170,8 @@ def run_gui(
         if window.get_event(ti.ui.PRESS):
             if window.event.key == ti.ui.SPACE:
                 paused = not paused
+                if logger is not None:
+                    logger.info("Pause toggled -> %s", paused)
 
         gui = window.get_gui()
 
@@ -189,6 +200,8 @@ def run_gui(
                 for name in mesh_presets.keys():
                     if g.button(name):
                         current_mesh_name = name
+                        if logger is not None:
+                            logger.info("Rebuild sim mesh=%s", name)
                         system, solver = rebuild_sim(name)
                         constraint_idx = int(cfg.constraint_mode.value)
 
@@ -208,9 +221,9 @@ def run_gui(
                         solver = ImplicitNewtonCGSolver(system, cfg) if cfg.use_implicit else ExplicitFEMSolver(system, cfg)
 
                 if p.show_dt:
-                    cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-4, 5.0e-3)
+                    cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-2, 5.0e-2)
                 if p.show_substeps:
-                    cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 20)
+                    cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
                 if p.show_damping:
                     cfg.damping = panel.slider_float("damping", cfg.damping, 0.90, 1.0)
                 if p.show_youngs:
@@ -256,13 +269,20 @@ def run_gui(
         cx, cy = window.get_cursor_pos()
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
+        in_window = 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0
         over_gui = _cursor_over_gui(cx, cy)
         ws = window.get_window_shape()
         aspect = float(ws[0]) / max(float(ws[1]), 1.0)
-        ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, cam_dist, aspect, fov_deg=60.0)
+        ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
+
+        # Decide interaction ownership at press edge, then lock it for this drag.
+        if lmb and not prev_lmb:
+            lmb_started_on_blank = in_window and (not over_gui)
+        if rmb and not prev_rmb:
+            rmb_started_on_blank = in_window and (not over_gui)
 
         # LMB: pick/drag point if hit, otherwise pan camera.
-        if lmb and not prev_lmb and not over_gui and ray is not None:
+        if lmb and not prev_lmb and lmb_started_on_blank and ray is not None:
             system.begin_drag(ray[0], ray[1])
             dragging_point = int(system.drag_vertex_idx[None]) >= 0
             if not dragging_point:
@@ -270,7 +290,7 @@ def run_gui(
                 best_i = -1
                 best_dist = 1e9
                 for i in range(x_np.shape[0]):
-                    proj = _project_to_screen(x_np[i], cam_pos, cam_target, aspect, fov_deg=60.0)
+                    proj = _project_to_screen(x_np[i], cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
                     if proj is None:
                         continue
                     sx, sy, depth = proj
@@ -281,22 +301,25 @@ def run_gui(
                 if best_i >= 0 and hasattr(system, "begin_drag_vertex"):
                     system.begin_drag_vertex(best_i, ray[0], ray[1])
                     dragging_point = int(system.drag_vertex_idx[None]) >= 0
-        if lmb and dragging_point and ray is not None:
+        if lmb and lmb_started_on_blank and dragging_point and ray is not None:
             system.drag_to(ray[0], ray[1])
         if (not lmb) and prev_lmb:
             system.end_drag()
             dragging_point = False
+            lmb_started_on_blank = False
+        if (not rmb) and prev_rmb:
+            rmb_started_on_blank = False
 
         # Camera controls (lab2-style separation)
         if prev_cursor_valid:
             dx_mouse = cx - prev_cursor_x
             dy_mouse = cy - prev_cursor_y
-            if not over_gui:
-                if rmb:
+            if in_window:
+                if rmb and rmb_started_on_blank:
                     cam_yaw += dx_mouse * 3.0
                     cam_pitch -= dy_mouse * 3.0
                     cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
-                elif lmb and not dragging_point:
+                elif lmb and lmb_started_on_blank and not dragging_point:
                     forward = cam_target - cam_pos
                     forward[1] = 0.0
                     forward /= (np.linalg.norm(forward) + 1e-8)
@@ -315,14 +338,18 @@ def run_gui(
         cam_pos[2] = cam_target[2] + cam_dist * np.cos(cam_pitch) * np.sin(cam_yaw)
         camera.position(cam_pos[0], cam_pos[1], cam_pos[2])
         camera.lookat(cam_target[0], cam_target[1], cam_target[2])
+        camera.fov(_CAMERA_FOV_DEG)
 
         prev_lmb = lmb
         prev_rmb = rmb
         prev_cursor_x, prev_cursor_y = cx, cy
         prev_cursor_valid = True
 
+        solver_dt = 0.0
         if not paused:
+            step_t0 = time.perf_counter()
             solver.step()
+            solver_dt = time.perf_counter() - step_t0
         scene.set_camera(camera)
         if show_lighting:
             scene.point_light(pos=(8, 12, 10), color=(1.0, 1.0, 1.0))
@@ -336,4 +363,22 @@ def run_gui(
             scene.lines(system.line_points, width=1.0, color=(0.85, 0.85, 0.9))
 
         canvas.scene(scene)
+        render_dt = time.perf_counter() - frame_begin_t - solver_dt
         window.show()
+        frame_id += 1
+        if debug and logger is not None and frame_id % 30 == 0:
+            x_np = system.x.to_numpy()
+            v_np = system.v.to_numpy()
+            logger.debug(
+                "frame=%d paused=%s dt=%.6f substeps=%d verts=%d y_min=%.4f y_max=%.4f v_mean=%.5f solver=%.4fs render=%.4fs",
+                frame_id,
+                paused,
+                cfg.dt,
+                cfg.substeps,
+                int(system.num_vertices),
+                float(x_np[:, 1].min()),
+                float(x_np[:, 1].max()),
+                float(np.linalg.norm(v_np, axis=1).mean()),
+                solver_dt,
+                max(0.0, render_dt),
+            )
