@@ -406,6 +406,17 @@ def run_gui(
                     cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
                 if p.show_damping:
                     cfg.damping = panel.slider_float("damping", cfg.damping, 0.90, 1.0)
+
+                # Drag interaction parameters (for demonstrating instability)
+                panel.text("--- Drag Force ---")
+                if hasattr(system, "drag_stiffness"):
+                    drag_k = system.drag_stiffness
+                    drag_c = system.drag_damping
+                    new_drag_k = panel.slider_float("drag_k", drag_k, 100.0, 5000.0)
+                    new_drag_c = panel.slider_float("drag_damping", drag_c, 1.0, 50.0)
+                    if abs(new_drag_k - drag_k) > 0.1 or abs(new_drag_c - drag_c) > 0.1:
+                        system.set_drag_params(new_drag_k, new_drag_c)
+
                 if p.show_youngs:
                     cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, 1.0e3, 8.0e4)
                 if p.show_poisson:

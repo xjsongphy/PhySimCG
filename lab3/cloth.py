@@ -336,6 +336,10 @@ class ClothSystem:
     def set_collision_world(self, world: CollisionWorld | None) -> None:
         self.collision_world = world
 
+    def set_drag_params(self, stiffness: float, damping: float) -> None:
+        self.drag_stiffness = stiffness
+        self.drag_damping = damping
+
     def add_collision_forces(self) -> None:
         if not self.config.enable_collision or self.collision_world is None:
             return

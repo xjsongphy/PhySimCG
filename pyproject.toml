@@ -8,6 +8,7 @@ dependencies = [
     "rich>=15.0.0",
     "scikit-image>=0.26.0",
     "taichi>=1.7",
+    "imageio>=2.0",
 ]
 
 [build-system]
