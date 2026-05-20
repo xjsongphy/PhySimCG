@@ -263,6 +263,16 @@ def run_gui(
         if window.is_pressed("f"):
             cam_dist = min(40.0, cam_dist + 0.08)
 
+        # Mouse wheel zoom (if cursor not over GUI)
+        if in_window and not over_gui:
+            while window.get_event(ti.ui.WHEEL):
+                # Scroll delta: (dx, dy) - typically dy for scroll wheel
+                # Positive dy = scroll away (zoom out), Negative = scroll toward (zoom in)
+                delta = window.event.delta
+                scroll_y = delta[1] if len(delta) > 1 else 0.0
+                zoom_speed = cam_dist * 0.1
+                cam_dist = np.clip(cam_dist + scroll_y * zoom_speed, 0.5, 40.0)
+
         cam_pos[0] = cam_target[0] + cam_dist * np.cos(cam_pitch) * np.cos(cam_yaw)
         cam_pos[1] = cam_target[1] + cam_dist * np.sin(cam_pitch)
         cam_pos[2] = cam_target[2] + cam_dist * np.cos(cam_pitch) * np.sin(cam_yaw)
@@ -291,9 +301,10 @@ def run_gui(
             g.text(f"pos: ({cx:.2f},{cy:.2f})")
             g.text(f"over_gui:{over_gui} action:{lmb_action}")
             g.text("---")
-            g.text("RMB + drag: camera")
+            g.text("RMB + drag: orbit")
             g.text("LMB hit point: drag force")
             g.text("LMB empty: camera pan")
+            g.text("Wheel / R,F: zoom")
             g.text("SPACE: pause/resume")
             if g.button("Reset Sim"):
                 system.reset_state()
