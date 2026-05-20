@@ -544,7 +544,6 @@ def run_gui(
             for sphere in cw.spheres:
                 if not sphere.enabled:
                     continue
-                import taichi as ti
                 # Draw sphere as a mesh (simplified: use particles for visualization)
                 # Create a simple wireframe representation
                 c = sphere.center
