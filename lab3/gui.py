@@ -4,6 +4,10 @@ import taichi as ti
 import numpy as np
 import time
 import logging
+import os
+import shutil
+import tempfile
+import imageio
 
 from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
@@ -129,6 +133,30 @@ def _cursor_over_gui(cx: float, cy: float) -> bool:
     return False
 
 
+def _save_gif_from_dir(tmp_dir, fps=15):
+    """Read PNG frames from temp dir, combine into GIF, then clean up."""
+    import re
+    pngs = sorted(
+        [f for f in os.listdir(tmp_dir) if f.endswith(".png")],
+        key=lambda x: int(re.search(r'\d+', x).group())
+    )
+    if not pngs:
+        print("[record] No frames captured.")
+        return
+    frames = []
+    for p in pngs:
+        f = imageio.v3.imread(os.path.join(tmp_dir, p))
+        s = f[::2, ::2]  # Downsample 2x
+        if s.shape[-1] == 4:
+            s = s[..., :3]
+        frames.append(s)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out = os.path.join(os.path.dirname(__file__), f"record_{ts}.gif")
+    imageio.mimsave(out, frames, fps=fps, loop=0)
+    shutil.rmtree(tmp_dir)
+    print(f"[record] GIF saved: {out} ({len(frames)} frames, {frames[0].shape[1]}x{frames[0].shape[0]}px)")
+
+
 def run_gui(
     system: FEMSystem,
     solver: BaseFEMSolver,
@@ -174,6 +202,12 @@ def run_gui(
     frame_dt = 1.0 / target_fps
     last_frame_t = time.perf_counter()
     frame_id = 0
+
+    # Recording state
+    _recording = False
+    _record_dir = None
+    _record_count = 0
+    _record_frame = 0
 
     while window.running:
         frame_begin_t = time.perf_counter()
@@ -304,10 +338,24 @@ def run_gui(
             g.text("RMB + drag: orbit")
             g.text("LMB hit point: drag force")
             g.text("LMB empty: camera pan")
-            g.text("Wheel / R,F: zoom")
+            g.text("R / F: zoom")
             g.text("SPACE: pause/resume")
             if g.button("Reset Sim"):
                 system.reset_state()
+            if g.button("Stop GIF" if _recording else "Record GIF"):
+                if not _recording:
+                    _recording = True
+                    _record_dir = tempfile.mkdtemp(prefix="lab3rec_")
+                    _record_count = 0
+                    _record_frame = 0
+                else:
+                    _recording = False
+                    if _record_dir:
+                        _save_gif_from_dir(_record_dir)
+                    _record_dir = None
+                    _record_count = 0
+            if _recording:
+                g.text(f"  REC {_record_count}")
             g.text("Constraint:")
             new_constraint_idx = constraint_idx
             for i, name in enumerate(_CONSTRAINT_NAMES):
@@ -444,6 +492,12 @@ def run_gui(
             scene.lines(system.line_points, width=1.0, color=(0.85, 0.85, 0.9))
 
         canvas.scene(scene)
+        # Capture frame for GIF recording
+        if _recording and _record_frame % 3 == 0:
+            frame_path = os.path.join(_record_dir, f"frame_{_record_count:06d}.png")
+            window.save_image(frame_path)
+            _record_count += 1
+        _record_frame += 1
         render_dt = time.perf_counter() - frame_begin_t - solver_dt
         window.show()
         frame_id += 1
