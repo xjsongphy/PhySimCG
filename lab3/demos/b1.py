@@ -37,6 +37,8 @@ def run(debug: bool = False, safe_boot: bool = False):
     ui_cfg.parameters.show_implicit_toggle = False
     ui_cfg.parameters.show_newton_iters = False
     ui_cfg.parameters.show_cg_iters = False
+    # B1 bonus: enable boundary vibration controls
+    ui_cfg.parameters.show_boundary_vibration = True
 
     def _rebuild(name: str):
         p = mesh_presets[name]

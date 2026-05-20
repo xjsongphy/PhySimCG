@@ -50,8 +50,13 @@ class ExplicitFEMSolver(BaseFEMSolver):
         if hasattr(self.system, "add_collision_forces"):
             self.system.add_collision_forces()
         self.system.integrate_explicit(self.config.dt, self.config.damping)
+        # Apply boundary vibration after integration (overrides fixed vertex positions)
+        if self.config.enable_boundary_vibration and hasattr(self.system, "apply_boundary_vibration"):
+            t = self.system.get_sim_time()
+            self.system.apply_boundary_vibration(t, self.config.boundary_vibration_amplitude, self.config.boundary_vibration_frequency)
         if self.config.enable_builtin_ground:
             self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)
+        self.system.advance_sim_time(self.config.dt)
 
     def step(self) -> None:
         self.sync_material_from_config()

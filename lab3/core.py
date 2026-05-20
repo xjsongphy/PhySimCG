@@ -41,6 +41,10 @@ class FEMSystem:
         self._drag_t = 0.0
         self.collision_world: CollisionWorld | None = None
 
+        # Boundary vibration state
+        self._sim_time = 0.0
+        self._boundary_rest_y = ti.field(dtype=ti.f32, shape=self.num_vertices)
+
         self._init_from_numpy(points, tets, edges)
         self._rest_positions_np = self.x.to_numpy()
 
@@ -86,6 +90,10 @@ class FEMSystem:
         self.edge_indices.from_numpy(flat_edges)
 
         self._apply_constraint_mode(points, self.config.constraint_mode)
+
+        # Store rest Y positions for fixed vertices (for vibration)
+        boundary_rest_y_np = points[:, 1].copy()
+        self._boundary_rest_y.from_numpy(boundary_rest_y_np)
 
     def _apply_constraint_mode(self, points: np.ndarray, mode: ConstraintMode) -> None:
         x = points[:, 0]
@@ -156,6 +164,14 @@ class FEMSystem:
                 continue
             self.v[i] = damping * (self.v[i] + dt * self.inv_mass[i] * self.f[i])
             self.x[i] += dt * self.v[i]
+
+    @ti.kernel
+    def apply_boundary_vibration(self, t: ti.f32, amplitude: ti.f32, frequency: ti.f32):
+        for i in self.x:
+            if self.fixed[i] == 1:
+                offset = amplitude * ti.sin(frequency * t)
+                self.x[i].y = self._boundary_rest_y[i] + offset
+                self.v[i] = ti.Vector([0.0, 0.0, 0.0])
 
     @ti.kernel
     def apply_ground_plane(self, y_ground: ti.f32, restitution: ti.f32):
@@ -273,6 +289,13 @@ class FEMSystem:
         self.v.fill(0.0)
         self.f.fill(0.0)
         self.end_drag()
+        self._sim_time = 0.0
+
+    def get_sim_time(self) -> float:
+        return self._sim_time
+
+    def advance_sim_time(self, dt: float) -> None:
+        self._sim_time += dt
 
     def set_collision_world(self, world: CollisionWorld | None) -> None:
         self.collision_world = world

@@ -65,6 +65,11 @@ class FEMConfig:
     cloth_bend_k: float = 120.0
     cloth_bend_damping: float = 2.0
 
+    # Boundary vibration (B1 bonus): fixed vertices sinusoidal vibration
+    enable_boundary_vibration: bool = False
+    boundary_vibration_amplitude: float = 0.1
+    boundary_vibration_frequency: float = 2.0
+
 
 @dataclass(slots=True)
 class ParameterPanelVisibility:
@@ -83,6 +88,7 @@ class ParameterPanelVisibility:
     show_cg_iters: bool = True
     show_material_dropdown: bool = True
     show_material_text: bool = True
+    show_boundary_vibration: bool = False
 
 
 @dataclass(slots=True)

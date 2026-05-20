@@ -432,6 +432,14 @@ def run_gui(
                     gy = panel.slider_float("gravity_y", cfg.gravity[1], -9.8, 0.0)
                     cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
 
+                # --- Boundary Vibration (B1 bonus) ---
+                if p.show_boundary_vibration:
+                    panel.text("--- Boundary Vibration ---")
+                    cfg.enable_boundary_vibration = panel.checkbox("Vibrate fixed", cfg.enable_boundary_vibration)
+                    if cfg.enable_boundary_vibration:
+                        cfg.boundary_vibration_amplitude = panel.slider_float("Amplitude", cfg.boundary_vibration_amplitude, 0.0, 0.5)
+                        cfg.boundary_vibration_frequency = panel.slider_float("Frequency", cfg.boundary_vibration_frequency, 0.5, 10.0)
+
                 # --- Implicit Solver ---
                 panel.text("--- Implicit Solver ---")
                 if p.show_newton_iters:
