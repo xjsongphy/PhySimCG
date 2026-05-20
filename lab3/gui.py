@@ -510,6 +510,88 @@ def run_gui(
             system.build_line_points()
             scene.lines(system.line_points, width=1.0, color=(0.85, 0.85, 0.9))
 
+        # Render collision objects
+        if hasattr(system, "collision_world") and system.collision_world is not None:
+            cw = system.collision_world
+            # Draw planes as gray grids
+            for plane in cw.planes:
+                if not plane.enabled:
+                    continue
+                n = plane.normal
+                o = plane.offset
+                # Create a large quad on the plane
+                if abs(n[1]) > 0.9:  # Horizontal plane (y = constant)
+                    y = o
+                    # Grid lines
+                    for i in range(-10, 11):
+                        x0, z0 = -10.0 + i, -10.0
+                        x1, z1 = -10.0 + i, 10.0
+                        scene.lines(np.array([[x0, y, z0], [x1, y, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
+                        x0, z0 = -10.0, -10.0 + i
+                        x1, z1 = 10.0, -10.0 + i
+                        scene.lines(np.array([[x0, y, z0], [x1, y, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
+                elif abs(n[0]) > 0.9:  # Vertical plane (x = constant)
+                    x = o
+                    for i in range(-10, 11):
+                        y0, z0 = -10.0 + i, -10.0
+                        y1, z1 = -10.0 + i, 10.0
+                        scene.lines(np.array([[x, y0, z0], [x, y1, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
+                        y0, z0 = -10.0, -10.0 + i
+                        y1, z1 = 10.0, -10.0 + i
+                        scene.lines(np.array([[x, y0, z0], [x, y1, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
+
+            # Draw spheres
+            for sphere in cw.spheres:
+                if not sphere.enabled:
+                    continue
+                import taichi as ti
+                # Draw sphere as a mesh (simplified: use particles for visualization)
+                # Create a simple wireframe representation
+                c = sphere.center
+                r = sphere.radius
+                # Draw rings around the sphere
+                for axis in range(3):
+                    for angle_idx in range(8):
+                        theta = angle_idx * np.pi / 4
+                        pts = []
+                        for phi in np.linspace(0, 2 * np.pi, 32):
+                            if axis == 0:  # Ring in YZ plane
+                                p = [c[0] + r * np.cos(theta) * np.cos(phi), c[1] + r * np.sin(phi), c[2] + r * np.cos(theta) * np.sin(phi)]
+                            elif axis == 1:  # Ring in XZ plane
+                                p = [c[0] + r * np.cos(phi), c[1] + r * np.cos(theta) * np.sin(phi), c[2] + r * np.sin(theta) * np.sin(phi)]
+                            else:  # Ring in XY plane
+                                p = [c[0] + r * np.cos(phi), c[1] + r * np.sin(theta) * np.sin(phi), c[2] + r * np.cos(theta) * np.cos(phi)]
+                            pts.append(p)
+                        pts = np.array(pts, dtype=np.float32)
+                        scene.lines(pts, width=2.0, color=(1.0, 0.4, 0.4))
+
+            # Draw AABB boxes
+            for aabb in cw.aabbs:
+                if not aabb.enabled:
+                    continue
+                bmin = np.array(aabb.bmin, dtype=np.float32)
+                bmax = np.array(aabb.bmax, dtype=np.float32)
+                # Draw box edges
+                edges = [
+                    # Bottom face
+                    [[bmin[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmin[2]]],
+                    [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmax[2]]],
+                    [[bmax[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmax[2]]],
+                    [[bmin[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmin[2]]],
+                    # Top face
+                    [[bmin[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
+                    [[bmax[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmax[2]]],
+                    [[bmax[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmax[2]]],
+                    [[bmin[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmin[2]]],
+                    # Vertical edges
+                    [[bmin[0], bmin[1], bmin[2]], [bmin[0], bmax[1], bmin[2]]],
+                    [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
+                    [[bmax[0], bmin[1], bmax[2]], [bmax[0], bmax[1], bmax[2]]],
+                    [[bmin[0], bmin[1], bmax[2]], [bmin[0], bmax[1], bmax[2]]],
+                ]
+                for edge in edges:
+                    scene.lines(np.array(edge, dtype=np.float32), width=3.0, color=(1.0, 0.6, 0.2))
+
         canvas.scene(scene)
         # Capture frame for GIF recording
         if _recording and _record_frame % 3 == 0:
