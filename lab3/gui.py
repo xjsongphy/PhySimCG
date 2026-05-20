@@ -104,15 +104,28 @@ def _project_to_screen(
 
 
 def _cursor_over_gui(cx: float, cy: float) -> bool:
-    # Scene panel
-    if 0.02 <= cx <= 0.26 and 0.02 <= cy <= 0.28:
+    # sub_window 使用左上角原点 (+y向下)，get_cursor_pos 使用左下角原点 (+y向上)
+    # 转换：y_cursor_bottom = 1 - y_subwindow_top - height
+    m = 0.015  # margin for imgui chrome
+
+    # Scene: sub_window(..., 0.02, 0.02, 0.24, 0.26)
+    # x: [0.02, 0.26], y_top: 0.02, y_bottom: 0.02+0.26=0.28
+    # 转换后 y: [1-0.28, 1-0.02] = [0.72, 0.98]
+    if 0.02 - m <= cx <= 0.26 + m and 0.72 - m <= cy <= 0.98 + m:
         return True
-    # Controls panel
-    if 0.02 <= cx <= 0.28 and 0.20 <= cy <= 0.76:
+
+    # Controls: sub_window(..., 0.02, 0.20, 0.26, 0.56)
+    # x: [0.02, 0.28], y_top: 0.20, y_bottom: 0.20+0.56=0.76
+    # 转换后 y: [1-0.76, 1-0.20] = [0.24, 0.80]
+    if 0.02 - m <= cx <= 0.28 + m and 0.24 - m <= cy <= 0.80 + m:
         return True
-    # Render panel
-    if 0.30 <= cx <= 0.48 and 0.02 <= cy <= 0.22:
+
+    # Render: sub_window(..., 0.30, 0.02, 0.18, 0.20)
+    # x: [0.30, 0.48], y_top: 0.02, y_bottom: 0.02+0.20=0.22
+    # 转换后 y: [1-0.22, 1-0.02] = [0.78, 0.98]
+    if 0.30 - m <= cx <= 0.48 + m and 0.78 - m <= cy <= 0.98 + m:
         return True
+
     return False
 
 
@@ -149,9 +162,11 @@ def run_gui(
     prev_cursor_valid = False
     prev_cursor_x = 0.0
     prev_cursor_y = 0.0
-    lmb_started_on_blank = False
-    rmb_started_on_blank = False
-    dragging_point = False
+    # 交互状态机：按下瞬间锁定，松开前互斥
+    # 'none' / 'gui' / 'particle' / 'camera'
+    lmb_action = "none"
+    # 'none' / 'gui' / 'orbit'
+    rmb_action = "none"
     constraint_idx = int(cfg.constraint_mode.value)
     current_mesh_name = next(iter(mesh_presets.keys())) if mesh_presets else ""
     target_fps = 120.0
@@ -167,6 +182,99 @@ def run_gui(
             time.sleep(frame_dt - elapsed)
         last_frame_t = time.perf_counter()
 
+        # ====== 在 GUI 渲染之前捕获鼠标状态 ======
+        cx, cy = window.get_cursor_pos()
+        lmb = window.is_pressed(ti.ui.LMB)
+        rmb = window.is_pressed(ti.ui.RMB)
+        in_window = 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0
+        over_gui = _cursor_over_gui(cx, cy)
+        ws = window.get_window_shape()
+        aspect = float(ws[0]) / max(float(ws[1]), 1.0)
+        ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
+
+        # --- LMB: 按下时判断类型，整段拖拽期间锁定 ---
+        if lmb and not prev_lmb:
+            if over_gui or not in_window:
+                lmb_action = "gui"
+            elif ray is not None:
+                system.begin_drag(ray[0], ray[1])
+                if int(system.drag_vertex_idx[None]) >= 0:
+                    lmb_action = "particle"
+                else:
+                    x_np = system.x.to_numpy()
+                    best_i = -1
+                    best_dist = 1e9
+                    for i in range(x_np.shape[0]):
+                        proj = _project_to_screen(x_np[i], cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
+                        if proj is None:
+                            continue
+                        sx, sy, depth = proj
+                        d = np.hypot(sx - cx, sy - cy)
+                        if d < max(0.02, 0.12 / max(depth, 1e-6)) and d < best_dist:
+                            best_dist = d
+                            best_i = i
+                    if best_i >= 0 and hasattr(system, "begin_drag_vertex"):
+                        system.begin_drag_vertex(best_i, ray[0], ray[1])
+                        if int(system.drag_vertex_idx[None]) >= 0:
+                            lmb_action = "particle"
+                        else:
+                            lmb_action = "camera"
+                    else:
+                        lmb_action = "camera"
+            else:
+                lmb_action = "camera"
+
+        if lmb_action == "particle" and lmb and ray is not None:
+            system.drag_to(ray[0], ray[1])
+        if not lmb and prev_lmb:
+            if lmb_action == "particle":
+                system.end_drag()
+            lmb_action = "none"
+
+        # --- RMB: 按下时判断类型 ---
+        if rmb and not prev_rmb:
+            if over_gui or not in_window:
+                rmb_action = "gui"
+            else:
+                rmb_action = "orbit"
+        if not rmb and prev_rmb:
+            rmb_action = "none"
+
+        # Camera controls
+        if prev_cursor_valid:
+            dx_mouse = cx - prev_cursor_x
+            dy_mouse = cy - prev_cursor_y
+            if rmb_action == "orbit":
+                cam_yaw += dx_mouse * 3.0
+                cam_pitch -= dy_mouse * 3.0
+                cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
+            elif lmb_action == "camera":
+                forward = cam_target - cam_pos
+                forward[1] = 0.0
+                forward /= (np.linalg.norm(forward) + 1e-8)
+                right_pan = np.array([forward[2], 0.0, -forward[0]], dtype=np.float32)
+                pan_speed = max(0.2, cam_dist * 0.8)
+                cam_target += right_pan * (dx_mouse * pan_speed)
+                cam_target -= np.array([0.0, dy_mouse * pan_speed, 0.0], dtype=np.float32)
+
+        if window.is_pressed("r"):
+            cam_dist = max(0.5, cam_dist - 0.08)
+        if window.is_pressed("f"):
+            cam_dist = min(40.0, cam_dist + 0.08)
+
+        cam_pos[0] = cam_target[0] + cam_dist * np.cos(cam_pitch) * np.cos(cam_yaw)
+        cam_pos[1] = cam_target[1] + cam_dist * np.sin(cam_pitch)
+        cam_pos[2] = cam_target[2] + cam_dist * np.cos(cam_pitch) * np.sin(cam_yaw)
+        camera.position(cam_pos[0], cam_pos[1], cam_pos[2])
+        camera.lookat(cam_target[0], cam_target[1], cam_target[2])
+        camera.fov(_CAMERA_FOV_DEG)
+
+        prev_lmb = lmb
+        prev_rmb = rmb
+        prev_cursor_x, prev_cursor_y = cx, cy
+        prev_cursor_valid = True
+        # ====== 鼠标状态捕获结束 ======
+
         if window.get_event(ti.ui.PRESS):
             if window.event.key == ti.ui.SPACE:
                 paused = not paused
@@ -178,6 +286,10 @@ def run_gui(
         # --- Scene panel ---
         with gui.sub_window("Scene", 0.02, 0.02, 0.24, 0.26) as g:
             g.text("=== Scene ===")
+            # Debug: 显示鼠标位置和状态
+            g.text(f"pos: ({cx:.2f},{cy:.2f})")
+            g.text(f"over_gui:{over_gui} action:{lmb_action}")
+            g.text("---")
             g.text("RMB + drag: camera")
             g.text("LMB hit point: drag force")
             g.text("LMB empty: camera pan")
@@ -222,6 +334,24 @@ def run_gui(
 
                 if p.show_dt:
                     cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-2, 5.0e-2)
+                    # 显示稳定性提示
+                    if not cfg.use_implicit:
+                        # 估算稳定性限制：dt_critical ≈ h / sqrt(E/rho)
+                        wave_speed = np.sqrt(cfg.youngs_modulus / cfg.density)
+                        cell_size = cfg.cell_size if hasattr(cfg, 'cell_size') else 0.5
+                        dt_critical = cell_size / wave_speed
+                        # 拖拽力会大幅降低稳定上限
+                        dt_safe = dt_critical / 10.0  # 保守估计
+                        effective_dt = cfg.dt / max(1, cfg.substeps)
+                        panel.text(f"dt per step: {effective_dt:.1e}s")
+                        if effective_dt > dt_safe:
+                            panel.text(f"[WARNING] dt too high!", color=(1.0, 0.2, 0.2))
+                            panel.text(f"Stability limit: ~{dt_safe:.1e}s", color=(1.0, 0.2, 0.2))
+                        elif effective_dt > dt_safe * 0.5:
+                            panel.text(f"[CAUTION] Near stability limit", color=(1.0, 0.67, 0.0))
+                            panel.text(f"Safe limit: ~{dt_safe:.1e}s", color=(1.0, 0.67, 0.0))
+                        else:
+                            panel.text(f"Stability limit: ~{dt_safe:.1e}s", color=(0.2, 1.0, 0.2))
                 if p.show_substeps:
                     cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
                 if p.show_damping:
@@ -249,6 +379,7 @@ def run_gui(
                     if selected_name != material_name:
                         material_name = selected_name
                         _rebuild_model_from_ui(solver, cfg, material_name)
+                        system.reset_state()
 
                 if p.show_material_text:
                     panel.text(f"Material: {material_name}")
@@ -264,86 +395,6 @@ def run_gui(
                     show_wireframe = g.checkbox("Wireframe", show_wireframe)
                 if r.show_lighting:
                     show_lighting = g.checkbox("Lighting", show_lighting)
-
-        # Interaction: pick vertex by ray-sphere test, drag to apply spring force.
-        cx, cy = window.get_cursor_pos()
-        lmb = window.is_pressed(ti.ui.LMB)
-        rmb = window.is_pressed(ti.ui.RMB)
-        in_window = 0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0
-        over_gui = _cursor_over_gui(cx, cy)
-        ws = window.get_window_shape()
-        aspect = float(ws[0]) / max(float(ws[1]), 1.0)
-        ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
-
-        # Decide interaction ownership at press edge, then lock it for this drag.
-        if lmb and not prev_lmb:
-            lmb_started_on_blank = in_window and (not over_gui)
-        if rmb and not prev_rmb:
-            rmb_started_on_blank = in_window and (not over_gui)
-
-        # LMB: pick/drag point if hit, otherwise pan camera.
-        if lmb and not prev_lmb and lmb_started_on_blank and ray is not None:
-            system.begin_drag(ray[0], ray[1])
-            dragging_point = int(system.drag_vertex_idx[None]) >= 0
-            if not dragging_point:
-                x_np = system.x.to_numpy()
-                best_i = -1
-                best_dist = 1e9
-                for i in range(x_np.shape[0]):
-                    proj = _project_to_screen(x_np[i], cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
-                    if proj is None:
-                        continue
-                    sx, sy, depth = proj
-                    d = np.hypot(sx - cx, sy - cy)
-                    if d < max(0.02, 0.12 / max(depth, 1e-6)) and d < best_dist:
-                        best_dist = d
-                        best_i = i
-                if best_i >= 0 and hasattr(system, "begin_drag_vertex"):
-                    system.begin_drag_vertex(best_i, ray[0], ray[1])
-                    dragging_point = int(system.drag_vertex_idx[None]) >= 0
-        if lmb and lmb_started_on_blank and dragging_point and ray is not None:
-            system.drag_to(ray[0], ray[1])
-        if (not lmb) and prev_lmb:
-            system.end_drag()
-            dragging_point = False
-            lmb_started_on_blank = False
-        if (not rmb) and prev_rmb:
-            rmb_started_on_blank = False
-
-        # Camera controls (lab2-style separation)
-        if prev_cursor_valid:
-            dx_mouse = cx - prev_cursor_x
-            dy_mouse = cy - prev_cursor_y
-            if in_window:
-                if rmb and rmb_started_on_blank:
-                    cam_yaw += dx_mouse * 3.0
-                    cam_pitch -= dy_mouse * 3.0
-                    cam_pitch = np.clip(cam_pitch, -1.55, 1.55)
-                elif lmb and lmb_started_on_blank and not dragging_point:
-                    forward = cam_target - cam_pos
-                    forward[1] = 0.0
-                    forward /= (np.linalg.norm(forward) + 1e-8)
-                    right_pan = np.array([forward[2], 0.0, -forward[0]], dtype=np.float32)
-                    pan_speed = max(0.2, cam_dist * 0.8)
-                    cam_target += right_pan * (dx_mouse * pan_speed)
-                    cam_target -= np.array([0.0, dy_mouse * pan_speed, 0.0], dtype=np.float32)
-
-        if window.is_pressed("r"):
-            cam_dist = max(0.5, cam_dist - 0.08)
-        if window.is_pressed("f"):
-            cam_dist = min(40.0, cam_dist + 0.08)
-
-        cam_pos[0] = cam_target[0] + cam_dist * np.cos(cam_pitch) * np.cos(cam_yaw)
-        cam_pos[1] = cam_target[1] + cam_dist * np.sin(cam_pitch)
-        cam_pos[2] = cam_target[2] + cam_dist * np.cos(cam_pitch) * np.sin(cam_yaw)
-        camera.position(cam_pos[0], cam_pos[1], cam_pos[2])
-        camera.lookat(cam_target[0], cam_target[1], cam_target[2])
-        camera.fov(_CAMERA_FOV_DEG)
-
-        prev_lmb = lmb
-        prev_rmb = rmb
-        prev_cursor_x, prev_cursor_y = cx, cy
-        prev_cursor_valid = True
 
         solver_dt = 0.0
         if not paused:
