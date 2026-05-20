@@ -382,6 +382,8 @@ def run_gui(
                         cfg.use_implicit = implicit_mode
                         solver = ImplicitNewtonCGSolver(system, cfg) if cfg.use_implicit else ExplicitFEMSolver(system, cfg)
 
+                # --- Time Integration ---
+                panel.text("--- Time ---")
                 if p.show_dt:
                     cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-2, 5.0e-2)
                     # Show stability hint
@@ -404,10 +406,17 @@ def run_gui(
                             panel.text(f"Stability limit: ~{dt_safe:.1e}s", color=(0.2, 1.0, 0.2))
                 if p.show_substeps:
                     cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
+
+                # --- Material Properties ---
+                panel.text("--- Material ---")
                 if p.show_damping:
                     cfg.damping = panel.slider_float("damping", cfg.damping, 0.90, 1.0)
+                if p.show_youngs:
+                    cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, 1.0e3, 8.0e4)
+                if p.show_poisson:
+                    cfg.poisson_ratio = panel.slider_float("Poisson", cfg.poisson_ratio, 0.05, 0.45)
 
-                # Drag interaction parameters (for demonstrating instability)
+                # --- Drag Force (Interaction) ---
                 panel.text("--- Drag Force ---")
                 if hasattr(system, "drag_stiffness"):
                     drag_k = system.drag_stiffness
@@ -417,13 +426,14 @@ def run_gui(
                     if abs(new_drag_k - drag_k) > 0.1 or abs(new_drag_c - drag_c) > 0.1:
                         system.set_drag_params(new_drag_k, new_drag_c)
 
-                if p.show_youngs:
-                    cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, 1.0e3, 8.0e4)
-                if p.show_poisson:
-                    cfg.poisson_ratio = panel.slider_float("Poisson", cfg.poisson_ratio, 0.05, 0.45)
+                # --- Environment ---
+                panel.text("--- Environment ---")
                 if p.show_gravity_y:
                     gy = panel.slider_float("gravity_y", cfg.gravity[1], -9.8, 0.0)
                     cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
+
+                # --- Implicit Solver ---
+                panel.text("--- Implicit Solver ---")
                 if p.show_newton_iters:
                     cfg.newton_max_iters = panel.slider_int("newton_iters", cfg.newton_max_iters, 2, 30)
                 if p.show_cg_iters:
