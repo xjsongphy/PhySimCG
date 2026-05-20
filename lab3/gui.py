@@ -138,6 +138,7 @@ def run_gui(
     rebuild_sim=None,
     logger: logging.Logger | None = None,
     debug: bool = False,
+    defaults=None,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -383,6 +384,24 @@ def run_gui(
 
                 if p.show_material_text:
                     panel.text(f"Material: {material_name}")
+
+                # 恢复默认值按钮
+                if defaults is not None:
+                    if panel.button("Reset Defaults"):
+                        # 恢复默认参数
+                        cfg.density = defaults.density
+                        cfg.youngs_modulus = defaults.youngs_modulus
+                        cfg.poisson_ratio = defaults.poisson_ratio
+                        cfg.damping = defaults.damping
+                        cfg.dt = defaults.dt
+                        cfg.substeps = defaults.substeps
+                        cfg.gravity = defaults.gravity
+                        # 恢复材料参数
+                        solver.sync_material_from_config()
+                        # 重置仿真
+                        system.reset_state()
+                        if logger is not None:
+                            logger.info("Reset to defaults")
 
         # --- Render panel ---
         r = ui_cfg.render

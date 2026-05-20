@@ -35,8 +35,8 @@ class FEMSystem:
         self.drag_vertex_idx[None] = -1
         self.drag_force[None] = ti.Vector([0.0, 0.0, 0.0])
 
-        self.drag_stiffness = 2500.0
-        self.drag_damping = 25.0
+        self.drag_stiffness = 800.0
+        self.drag_damping = 15.0
         self.pick_radius = 0.18
         self._drag_t = 0.0
         self.collision_world: CollisionWorld | None = None

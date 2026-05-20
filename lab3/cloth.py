@@ -84,8 +84,8 @@ class ClothSystem:
         self.drag_force = ti.Vector.field(3, dtype=ti.f32, shape=())
         self.drag_vertex_idx[None] = -1
         self.drag_force[None] = ti.Vector([0.0, 0.0, 0.0])
-        self.drag_stiffness = 1500.0
-        self.drag_damping = 20.0
+        self.drag_stiffness = 500.0
+        self.drag_damping = 12.0
         self.pick_radius = 0.12
         self._drag_t = 0.0
         self.collision_world: CollisionWorld | None = None

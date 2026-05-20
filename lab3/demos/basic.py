@@ -55,6 +55,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         rebuild_sim=_rebuild,
         logger=logger,
         debug=debug,
+        defaults=defaults,
     )
 
 
