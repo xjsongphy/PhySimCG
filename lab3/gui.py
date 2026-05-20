@@ -104,25 +104,25 @@ def _project_to_screen(
 
 
 def _cursor_over_gui(cx: float, cy: float) -> bool:
-    # sub_window 使用左上角原点 (+y向下)，get_cursor_pos 使用左下角原点 (+y向上)
-    # 转换：y_cursor_bottom = 1 - y_subwindow_top - height
+    # sub_window uses top-left origin (+y down), get_cursor_pos uses bottom-left origin (+y up)
+    # Transform: y_cursor_bottom = 1 - y_subwindow_top - height
     m = 0.015  # margin for imgui chrome
 
     # Scene: sub_window(..., 0.02, 0.02, 0.24, 0.26)
     # x: [0.02, 0.26], y_top: 0.02, y_bottom: 0.02+0.26=0.28
-    # 转换后 y: [1-0.28, 1-0.02] = [0.72, 0.98]
+    # Transformed y: [1-0.28, 1-0.02] = [0.72, 0.98]
     if 0.02 - m <= cx <= 0.26 + m and 0.72 - m <= cy <= 0.98 + m:
         return True
 
     # Controls: sub_window(..., 0.02, 0.20, 0.26, 0.56)
     # x: [0.02, 0.28], y_top: 0.20, y_bottom: 0.20+0.56=0.76
-    # 转换后 y: [1-0.76, 1-0.20] = [0.24, 0.80]
+    # Transformed y: [1-0.76, 1-0.20] = [0.24, 0.80]
     if 0.02 - m <= cx <= 0.28 + m and 0.24 - m <= cy <= 0.80 + m:
         return True
 
     # Render: sub_window(..., 0.30, 0.02, 0.18, 0.20)
     # x: [0.30, 0.48], y_top: 0.02, y_bottom: 0.02+0.20=0.22
-    # 转换后 y: [1-0.22, 1-0.02] = [0.78, 0.98]
+    # Transformed y: [1-0.22, 1-0.02] = [0.78, 0.98]
     if 0.30 - m <= cx <= 0.48 + m and 0.78 - m <= cy <= 0.98 + m:
         return True
 
@@ -163,7 +163,7 @@ def run_gui(
     prev_cursor_valid = False
     prev_cursor_x = 0.0
     prev_cursor_y = 0.0
-    # 交互状态机：按下瞬间锁定，松开前互斥
+    # Interaction state machine: lock on press, reset on release (mutually exclusive)
     # 'none' / 'gui' / 'particle' / 'camera'
     lmb_action = "none"
     # 'none' / 'gui' / 'orbit'
@@ -183,7 +183,7 @@ def run_gui(
             time.sleep(frame_dt - elapsed)
         last_frame_t = time.perf_counter()
 
-        # ====== 在 GUI 渲染之前捕获鼠标状态 ======
+        # ====== Capture mouse state BEFORE GUI rendering ======
         cx, cy = window.get_cursor_pos()
         lmb = window.is_pressed(ti.ui.LMB)
         rmb = window.is_pressed(ti.ui.RMB)
@@ -193,7 +193,7 @@ def run_gui(
         aspect = float(ws[0]) / max(float(ws[1]), 1.0)
         ray = _cursor_ray_from_camera(cx, cy, cam_pos, cam_target, aspect, fov_deg=_CAMERA_FOV_DEG)
 
-        # --- LMB: 按下时判断类型，整段拖拽期间锁定 ---
+        # --- LMB: determine type on press, lock for entire drag ---
         if lmb and not prev_lmb:
             if over_gui or not in_window:
                 lmb_action = "gui"
@@ -232,7 +232,7 @@ def run_gui(
                 system.end_drag()
             lmb_action = "none"
 
-        # --- RMB: 按下时判断类型 ---
+        # --- RMB: determine type on press ---
         if rmb and not prev_rmb:
             if over_gui or not in_window:
                 rmb_action = "gui"
@@ -274,7 +274,7 @@ def run_gui(
         prev_rmb = rmb
         prev_cursor_x, prev_cursor_y = cx, cy
         prev_cursor_valid = True
-        # ====== 鼠标状态捕获结束 ======
+        # ====== Mouse state capture complete ======
 
         if window.get_event(ti.ui.PRESS):
             if window.event.key == ti.ui.SPACE:
@@ -287,7 +287,7 @@ def run_gui(
         # --- Scene panel ---
         with gui.sub_window("Scene", 0.02, 0.02, 0.24, 0.26) as g:
             g.text("=== Scene ===")
-            # Debug: 显示鼠标位置和状态
+            # Debug: show mouse position and state
             g.text(f"pos: ({cx:.2f},{cy:.2f})")
             g.text(f"over_gui:{over_gui} action:{lmb_action}")
             g.text("---")
@@ -335,14 +335,14 @@ def run_gui(
 
                 if p.show_dt:
                     cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-2, 5.0e-2)
-                    # 显示稳定性提示
+                    # Show stability hint
                     if not cfg.use_implicit:
-                        # 估算稳定性限制：dt_critical ≈ h / sqrt(E/rho)
+                        # Estimate stability limit: dt_critical ≈ h / sqrt(E/rho)
                         wave_speed = np.sqrt(cfg.youngs_modulus / cfg.density)
                         cell_size = cfg.cell_size if hasattr(cfg, 'cell_size') else 0.5
                         dt_critical = cell_size / wave_speed
-                        # 拖拽力会大幅降低稳定上限
-                        dt_safe = dt_critical / 10.0  # 保守估计
+                        # Drag force significantly reduces stable dt
+                        dt_safe = dt_critical / 10.0  # Conservative estimate
                         effective_dt = cfg.dt / max(1, cfg.substeps)
                         panel.text(f"dt per step: {effective_dt:.1e}s")
                         if effective_dt > dt_safe:
@@ -385,10 +385,10 @@ def run_gui(
                 if p.show_material_text:
                     panel.text(f"Material: {material_name}")
 
-                # 恢复默认值按钮
+                # Reset defaults button
                 if defaults is not None:
                     if panel.button("Reset Defaults"):
-                        # 恢复默认参数
+                        # Restore default parameters
                         cfg.density = defaults.density
                         cfg.youngs_modulus = defaults.youngs_modulus
                         cfg.poisson_ratio = defaults.poisson_ratio
@@ -396,9 +396,9 @@ def run_gui(
                         cfg.dt = defaults.dt
                         cfg.substeps = defaults.substeps
                         cfg.gravity = defaults.gravity
-                        # 恢复材料参数
+                        # Restore material parameters
                         solver.sync_material_from_config()
-                        # 重置仿真
+                        # Reset simulation
                         system.reset_state()
                         if logger is not None:
                             logger.info("Reset to defaults")
