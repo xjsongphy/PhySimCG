@@ -228,9 +228,9 @@ def _draw_aabb_wire(scene, bmin: np.ndarray, bmax: np.ndarray, color=(1.0, 0.6, 
     scene.lines(pts, width=3.0, color=color)
 
 
-def _draw_collision_controls(panel, cfg: FEMConfig, system: FEMSystem, logger: logging.Logger | None) -> None:
+def _draw_collision_controls(panel, cfg: FEMConfig, system: FEMSystem, logger: logging.Logger | None) -> bool:
     if not hasattr(system, "collision_world") or system.collision_world is None:
-        return
+        return False
 
     cw = system.collision_world
     panel.text("--- Collision Objects ---")
@@ -260,6 +260,7 @@ def _draw_collision_controls(panel, cfg: FEMConfig, system: FEMSystem, logger: l
     panel.text(f"Collision: {'on' if cfg.enable_collision else 'off'}")
     if changed and logger is not None:
         logger.info("Collision toggled -> %s", cfg.enable_collision)
+    return changed
 
 
 def _stvk_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
@@ -390,7 +391,8 @@ def _log_sim_config(
         "constraint=%s dt=%.8g substeps=%d material=%s density=%.8g youngs=%.8g poisson=%.8g damping=%.8g "
         "gravity=(%.8g,%.8g,%.8g) newton_iters=%d cg_iters=%d boundary_vibration=%s "
         "boundary_amp=%.8g boundary_freq=%.8g side_stretch=%s side_amp=%.8g side_freq=%.8g "
-        "collision=%s collision_objects=%s collision_k=%.8g collision_c=%.8g collision_radius=%.8g",
+        "collision=%s collision_objects=%s collision_k=%.8g collision_c=%.8g collision_radius=%.8g "
+        "drag_k=%.8g drag_damping=%.8g",
         event,
         demo_name,
         scene_style,
@@ -423,6 +425,8 @@ def _log_sim_config(
         float(cfg.collision_k),
         float(cfg.collision_c),
         float(cfg.collision_particle_radius),
+        float(getattr(system, "drag_stiffness", 0.0)),
+        float(getattr(system, "drag_damping", 0.0)),
     )
 
 
@@ -557,6 +561,14 @@ def run_gui(
     _record_frame = 0
     analysis_mode = False
     _log_sim_config(logger, "start", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+
+    def _reset_after_parameter_change(event: str) -> None:
+        solver.sync_material_from_config()
+        system.reset_state()
+        _sync_collision_enabled(cfg, system)
+        if logger is not None:
+            logger.info("Parameter updated: %s", event)
+        _log_sim_config(logger, event, demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
 
     while window.running:
         frame_begin_t = time.perf_counter()
@@ -798,6 +810,7 @@ def run_gui(
                     if implicit_mode != cfg.use_implicit:
                         cfg.use_implicit = implicit_mode
                         solver = ImplicitNewtonCGSolver(system, cfg) if cfg.use_implicit else ExplicitFEMSolver(system, cfg)
+                        _reset_after_parameter_change("solver_change")
 
                 # --- Time Integration ---
                 panel.text("--- Time ---")
@@ -813,7 +826,10 @@ def run_gui(
                     pois_min, pois_max = slider_ranges.get("poisson", (pois_min, pois_max))
                     gy_min, gy_max = slider_ranges.get("gravity_y", (gy_min, gy_max))
                 if p.show_dt:
-                    cfg.dt = panel.slider_float("dt", cfg.dt, dt_min, dt_max)
+                    new_dt = panel.slider_float("dt", cfg.dt, dt_min, dt_max)
+                    if new_dt != cfg.dt:
+                        cfg.dt = new_dt
+                        _reset_after_parameter_change("param_dt")
                     # Show stability hint
                     if not cfg.use_implicit:
                         # Estimate stability limit: dt_critical ≈ h / sqrt(E/rho)
@@ -833,16 +849,28 @@ def run_gui(
                         else:
                             panel.text(f"Stability limit: ~{dt_safe:.1e}s", color=(0.2, 1.0, 0.2))
                 if p.show_substeps:
-                    cfg.substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
+                    new_substeps = panel.slider_int("substeps", cfg.substeps, 1, 12)
+                    if int(new_substeps) != int(cfg.substeps):
+                        cfg.substeps = int(new_substeps)
+                        _reset_after_parameter_change("param_substeps")
 
                 # --- Material Properties ---
                 panel.text("--- Material ---")
                 if p.show_damping:
-                    cfg.damping = panel.slider_float("damping", cfg.damping, damp_min, damp_max)
+                    new_damping = panel.slider_float("damping", cfg.damping, damp_min, damp_max)
+                    if new_damping != cfg.damping:
+                        cfg.damping = new_damping
+                        _reset_after_parameter_change("param_damping")
                 if p.show_youngs:
-                    cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, youngs_min, youngs_max)
+                    new_youngs = panel.slider_float("Young's", cfg.youngs_modulus, youngs_min, youngs_max)
+                    if new_youngs != cfg.youngs_modulus:
+                        cfg.youngs_modulus = new_youngs
+                        _reset_after_parameter_change("param_youngs")
                 if p.show_poisson:
-                    cfg.poisson_ratio = panel.slider_float("Poisson", cfg.poisson_ratio, pois_min, pois_max)
+                    new_poisson = panel.slider_float("Poisson", cfg.poisson_ratio, pois_min, pois_max)
+                    if new_poisson != cfg.poisson_ratio:
+                        cfg.poisson_ratio = new_poisson
+                        _reset_after_parameter_change("param_poisson")
 
                 # --- Drag Force (Interaction) ---
                 panel.text("--- Drag Force ---")
@@ -853,33 +881,61 @@ def run_gui(
                     new_drag_c = panel.slider_float("drag_damping", drag_c, 1.0, 50.0)
                     if abs(new_drag_k - drag_k) > 0.1 or abs(new_drag_c - drag_c) > 0.1:
                         system.set_drag_params(new_drag_k, new_drag_c)
+                        _reset_after_parameter_change("param_drag")
 
                 # --- Environment ---
                 panel.text("--- Environment ---")
                 if p.show_gravity_y:
                     gy = panel.slider_float("gravity_y", cfg.gravity[1], gy_min, gy_max)
-                    cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
+                    if gy != cfg.gravity[1]:
+                        cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
+                        _reset_after_parameter_change("param_gravity")
 
-                _draw_collision_controls(panel, cfg, system, logger)
+                if _draw_collision_controls(panel, cfg, system, logger):
+                    _reset_after_parameter_change("param_collision")
 
                 # --- Boundary Vibration (B1 bonus) ---
                 if p.show_boundary_vibration:
                     panel.text("--- Boundary Vibration ---")
-                    cfg.enable_boundary_vibration = panel.checkbox("Vibrate fixed", cfg.enable_boundary_vibration)
+                    new_vibrate = panel.checkbox("Vibrate fixed", cfg.enable_boundary_vibration)
+                    if new_vibrate != cfg.enable_boundary_vibration:
+                        cfg.enable_boundary_vibration = new_vibrate
+                        _reset_after_parameter_change("param_boundary_vibration")
                     if cfg.enable_boundary_vibration:
-                        cfg.boundary_vibration_amplitude = panel.slider_float("Amplitude", cfg.boundary_vibration_amplitude, 0.0, 0.5)
-                        cfg.boundary_vibration_frequency = panel.slider_float("Frequency", cfg.boundary_vibration_frequency, 0.5, 10.0)
-                    cfg.enable_side_stretch = panel.checkbox("Side Stretch", cfg.enable_side_stretch)
+                        new_amp = panel.slider_float("Amplitude", cfg.boundary_vibration_amplitude, 0.0, 0.5)
+                        if new_amp != cfg.boundary_vibration_amplitude:
+                            cfg.boundary_vibration_amplitude = new_amp
+                            _reset_after_parameter_change("param_boundary_amplitude")
+                        new_freq = panel.slider_float("Frequency", cfg.boundary_vibration_frequency, 0.5, 10.0)
+                        if new_freq != cfg.boundary_vibration_frequency:
+                            cfg.boundary_vibration_frequency = new_freq
+                            _reset_after_parameter_change("param_boundary_frequency")
+                    new_side_stretch = panel.checkbox("Side Stretch", cfg.enable_side_stretch)
+                    if new_side_stretch != cfg.enable_side_stretch:
+                        cfg.enable_side_stretch = new_side_stretch
+                        _reset_after_parameter_change("param_side_stretch")
                     if cfg.enable_side_stretch:
-                        cfg.side_stretch_amplitude = panel.slider_float("Stretch Amp", cfg.side_stretch_amplitude, 0.0, 0.8)
-                        cfg.side_stretch_frequency = panel.slider_float("Stretch Freq", cfg.side_stretch_frequency, 0.2, 10.0)
+                        new_stretch_amp = panel.slider_float("Stretch Amp", cfg.side_stretch_amplitude, 0.0, 0.8)
+                        if new_stretch_amp != cfg.side_stretch_amplitude:
+                            cfg.side_stretch_amplitude = new_stretch_amp
+                            _reset_after_parameter_change("param_side_stretch_amplitude")
+                        new_stretch_freq = panel.slider_float("Stretch Freq", cfg.side_stretch_frequency, 0.2, 10.0)
+                        if new_stretch_freq != cfg.side_stretch_frequency:
+                            cfg.side_stretch_frequency = new_stretch_freq
+                            _reset_after_parameter_change("param_side_stretch_frequency")
 
                 # --- Implicit Solver ---
                 panel.text("--- Implicit Solver ---")
                 if p.show_newton_iters:
-                    cfg.newton_max_iters = panel.slider_int("newton_iters", cfg.newton_max_iters, 2, 30)
+                    new_newton_iters = panel.slider_int("newton_iters", cfg.newton_max_iters, 2, 30)
+                    if int(new_newton_iters) != int(cfg.newton_max_iters):
+                        cfg.newton_max_iters = int(new_newton_iters)
+                        _reset_after_parameter_change("param_newton_iters")
                 if p.show_cg_iters:
-                    cfg.cg_max_iters = panel.slider_int("cg_iters", cfg.cg_max_iters, 10, 150)
+                    new_cg_iters = panel.slider_int("cg_iters", cfg.cg_max_iters, 10, 150)
+                    if int(new_cg_iters) != int(cfg.cg_max_iters):
+                        cfg.cg_max_iters = int(new_cg_iters)
+                        _reset_after_parameter_change("param_cg_iters")
 
                 if p.show_material_dropdown:
                     current_idx = _material_index_from_type(cfg.material_type)
@@ -892,8 +948,7 @@ def run_gui(
                     if selected_name != material_name:
                         material_name = selected_name
                         _rebuild_model_from_ui(solver, cfg, material_name)
-                        system.reset_state()
-                        _log_sim_config(logger, "material_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                        _reset_after_parameter_change("param_material")
 
                 if p.show_material_text:
                     panel.text(f"Material: {material_name}")
