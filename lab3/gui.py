@@ -54,6 +54,10 @@ def _material_index_from_type(material_type: MaterialType) -> int:
     return 2
 
 
+def _float_changed(a: float, b: float, rel_tol: float = 1.0e-6, abs_tol: float = 1.0e-9) -> bool:
+    return abs(float(a) - float(b)) > max(abs_tol, rel_tol * max(abs(float(a)), abs(float(b)), 1.0))
+
+
 def _to_mat4(m) -> np.ndarray:
     arr = np.array(m, dtype=np.float32)
     if arr.size == 16:
@@ -470,6 +474,7 @@ def run_gui(
     analysis_energy_fn: AnalysisEnergyFn = compute_model_total_energy,
     show_softbody_scenarios: bool = True,
     whole_body_drag: bool = False,
+    initial_paused: bool = False,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -492,7 +497,7 @@ def run_gui(
         cam_pos = np.array([3.5, 2.2, 4.8], dtype=np.float32)
     cloth_surface_mode = False
 
-    paused = False
+    paused = bool(initial_paused)
     material_name = _MATERIAL_NAMES[_material_index_from_type(cfg.material_type)]
     show_particles = True
     show_wireframe = True
@@ -801,7 +806,7 @@ def run_gui(
                     gy_min, gy_max = slider_ranges.get("gravity_y", (gy_min, gy_max))
                 if p.show_dt:
                     new_dt = panel.slider_float("dt", cfg.dt, dt_min, dt_max)
-                    if new_dt != cfg.dt:
+                    if _float_changed(new_dt, cfg.dt):
                         cfg.dt = new_dt
                         _reset_after_parameter_change("param_dt")
                     # Show stability hint
@@ -832,17 +837,17 @@ def run_gui(
                 panel.text("--- Material ---")
                 if p.show_damping:
                     new_damping = panel.slider_float("damping", cfg.damping, damp_min, damp_max)
-                    if new_damping != cfg.damping:
+                    if _float_changed(new_damping, cfg.damping):
                         cfg.damping = new_damping
                         _reset_after_parameter_change("param_damping")
                 if p.show_youngs:
                     new_youngs = panel.slider_float("Young's", cfg.youngs_modulus, youngs_min, youngs_max)
-                    if new_youngs != cfg.youngs_modulus:
+                    if _float_changed(new_youngs, cfg.youngs_modulus):
                         cfg.youngs_modulus = new_youngs
                         _reset_after_parameter_change("param_youngs")
                 if p.show_poisson:
                     new_poisson = panel.slider_float("Poisson", cfg.poisson_ratio, pois_min, pois_max)
-                    if new_poisson != cfg.poisson_ratio:
+                    if _float_changed(new_poisson, cfg.poisson_ratio):
                         cfg.poisson_ratio = new_poisson
                         _reset_after_parameter_change("param_poisson")
 
@@ -861,7 +866,7 @@ def run_gui(
                 panel.text("--- Environment ---")
                 if p.show_gravity_y:
                     gy = panel.slider_float("gravity_y", cfg.gravity[1], gy_min, gy_max)
-                    if gy != cfg.gravity[1]:
+                    if _float_changed(gy, cfg.gravity[1]):
                         cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
                         _reset_after_parameter_change("param_gravity")
 
@@ -877,11 +882,11 @@ def run_gui(
                         _reset_after_parameter_change("param_boundary_vibration")
                     if cfg.enable_boundary_vibration:
                         new_amp = panel.slider_float("Amplitude", cfg.boundary_vibration_amplitude, 0.0, 0.5)
-                        if new_amp != cfg.boundary_vibration_amplitude:
+                        if _float_changed(new_amp, cfg.boundary_vibration_amplitude):
                             cfg.boundary_vibration_amplitude = new_amp
                             _reset_after_parameter_change("param_boundary_amplitude")
                         new_freq = panel.slider_float("Frequency", cfg.boundary_vibration_frequency, 0.5, 10.0)
-                        if new_freq != cfg.boundary_vibration_frequency:
+                        if _float_changed(new_freq, cfg.boundary_vibration_frequency):
                             cfg.boundary_vibration_frequency = new_freq
                             _reset_after_parameter_change("param_boundary_frequency")
                     new_side_stretch = panel.checkbox("Side Stretch", cfg.enable_side_stretch)
@@ -890,11 +895,11 @@ def run_gui(
                         _reset_after_parameter_change("param_side_stretch")
                     if cfg.enable_side_stretch:
                         new_stretch_amp = panel.slider_float("Stretch Amp", cfg.side_stretch_amplitude, 0.0, 0.8)
-                        if new_stretch_amp != cfg.side_stretch_amplitude:
+                        if _float_changed(new_stretch_amp, cfg.side_stretch_amplitude):
                             cfg.side_stretch_amplitude = new_stretch_amp
                             _reset_after_parameter_change("param_side_stretch_amplitude")
                         new_stretch_freq = panel.slider_float("Stretch Freq", cfg.side_stretch_frequency, 0.2, 10.0)
-                        if new_stretch_freq != cfg.side_stretch_frequency:
+                        if _float_changed(new_stretch_freq, cfg.side_stretch_frequency):
                             cfg.side_stretch_frequency = new_stretch_freq
                             _reset_after_parameter_change("param_side_stretch_frequency")
 

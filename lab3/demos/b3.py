@@ -10,7 +10,12 @@ from lab3.solver import ExplicitFEMSolver
 
 def run(debug: bool = False, safe_boot: bool = False):
     logger = create_lab3_logger(debug)
-    ti.init(arch=ti.cpu if safe_boot else ti.gpu)
+    # B3 has interactive collision objects and whole-body dragging. On macOS,
+    # the Metal backend can stall on the first GUI frame for this scene, so keep
+    # this demo on CPU; the default Low mesh is small enough for interaction.
+    ti.init(arch=ti.cpu)
+    if not safe_boot:
+        logger.info("B3 uses CPU backend by default for stable interactive startup")
 
     defaults = SoftBodyDefaults(
         gravity=(0.0, -9.8, 0.0),
@@ -88,6 +93,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         slider_ranges=slider_ranges,
         show_softbody_scenarios=False,
         whole_body_drag=True,
+        initial_paused=True,
     )
 
 
