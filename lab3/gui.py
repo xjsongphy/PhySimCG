@@ -286,78 +286,12 @@ def _draw_collision_controls(panel, cfg: FEMConfig, system: FEMSystem, logger: l
     return changed
 
 
-def _stvk_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
-    dim = F.shape[1]
-    E = 0.5 * (F.T @ F - np.eye(dim, dtype=np.float32))
-    tr_e = float(np.trace(E))
-    return float(mu * np.sum(E * E) + 0.5 * lmbda * tr_e * tr_e)
-
-
-def _neo_hookean_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
-    J = max(float(np.linalg.det(F)), 1.0e-8)
-    log_j = np.log(J)
-    return float(0.5 * mu * (np.sum(F * F) - 3.0) - mu * log_j + 0.5 * lmbda * log_j * log_j)
-
-
-def _corotated_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
-    U, _, Vt = np.linalg.svd(F)
-    R = U @ Vt
-    J = float(np.linalg.det(F))
-    return float(mu * np.sum((F - R) * (F - R)) + 0.5 * lmbda * (J - 1.0) * (J - 1.0))
-
-
 def compute_model_energy_breakdown(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> dict[str, float]:
-    x = system.x.to_numpy()
-    v = system.v.to_numpy()
-    mass = system.mass.to_numpy()
-    kinetic = 0.5 * float(np.sum(mass[:, None] * v * v))
-    gravity = np.asarray(cfg.gravity, dtype=np.float32)
-    gravitational = -float(np.sum(mass * (x @ gravity)))
-
-    mu = float(solver.model.mu)
-    lmbda = float(solver.model.lmbda)
-    elastic = 0.0
-    if hasattr(system, "tets"):
-        tets = system.tets.to_numpy()
-        dm_inv = system.dm_inv.to_numpy()
-        rest_volume = system.rest_volume.to_numpy()
-        for e, tet in enumerate(tets):
-            x0, x1, x2, x3 = x[tet[0]], x[tet[1]], x[tet[2]], x[tet[3]]
-            Ds = np.column_stack((x1 - x0, x2 - x0, x3 - x0)).astype(np.float32)
-            F = Ds @ dm_inv[e]
-            if cfg.material_type == MaterialType.STVK:
-                psi = _stvk_energy_density(F, mu, lmbda)
-            elif cfg.material_type == MaterialType.NEO_HOOKEAN:
-                psi = _neo_hookean_energy_density(F, mu, lmbda)
-            else:
-                psi = _corotated_energy_density(F, mu, lmbda)
-            elastic += float(rest_volume[e]) * psi
-    elif hasattr(system, "tris"):
-        tris = system.tris.to_numpy()
-        dm_inv = system.dm_inv.to_numpy()
-        rest_area = system.rest_area.to_numpy()
-        for e, tri in enumerate(tris):
-            x0, x1, x2 = x[tri[0]], x[tri[1]], x[tri[2]]
-            Ds = np.column_stack((x1 - x0, x2 - x0)).astype(np.float32)
-            F = Ds @ dm_inv[e]
-            elastic += float(rest_area[e]) * _stvk_energy_density(F, mu, lmbda)
-
-    potential = gravitational + elastic
-    total = kinetic + potential
-    return {
-        "kinetic": kinetic,
-        "potential": potential,
-        "potential_gravity": gravitational,
-        "potential_elastic": elastic,
-        "total": total,
-    }
+    return system.compute_energy_breakdown(cfg, solver)
 
 
-def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> float:
-    return compute_model_energy_breakdown(system, cfg, solver)["total"]
-
-
-_compute_total_energy = compute_model_total_energy
+def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> dict[str, float]:
+    return system.compute_energy_breakdown(cfg, solver)
 
 
 def _mesh_density_label(system: FEMSystem, cfg: FEMConfig, mesh_name: str) -> str:
@@ -395,7 +329,7 @@ def _system_element_count(system: FEMSystem) -> int:
 
 
 def _system_state_is_finite(system: FEMSystem) -> bool:
-    return bool(np.isfinite(system.x.to_numpy()).all() and np.isfinite(system.v.to_numpy()).all())
+    return system.is_state_finite()
 
 
 def _log_sim_config(

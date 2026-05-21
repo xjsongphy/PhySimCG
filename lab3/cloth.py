@@ -3,7 +3,7 @@ import taichi as ti
 
 from lab3.collision import CollisionWorld
 from lab3.constants import ConstraintMode, FEMConfig
-from lab3.models import stvk_first_piola_tri
+from lab3.models import stvk_first_piola_tri, stvk_energy_density_tri
 
 
 def _build_cloth_mesh(nx: int, ny: int, sx: float, sy: float):
@@ -90,6 +90,11 @@ class ClothSystem:
         self.pick_radius = 0.12
         self._drag_t = 0.0
         self.collision_world: CollisionWorld | None = None
+
+        self._energy_kinetic = ti.field(ti.f32, shape=())
+        self._energy_grav = ti.field(ti.f32, shape=())
+        self._energy_elastic = ti.field(ti.f32, shape=())
+        self._state_nan_count = ti.field(ti.i32, shape=())
 
         # Boundary vibration state
         self._sim_time = 0.0
@@ -277,6 +282,47 @@ class ClothSystem:
             self.f[idx] += self.drag_force[None]
 
     @ti.kernel
+    def check_state_finite(self):
+        self._state_nan_count[None] = 0
+        for i in self.x:
+            x = self.x[i]
+            v = self.v[i]
+            bad = 0
+            if ti.math.isnan(x[0]) or ti.math.isnan(x[1]) or ti.math.isnan(x[2]):
+                bad = 1
+            if ti.math.isinf(x[0]) or ti.math.isinf(x[1]) or ti.math.isinf(x[2]):
+                bad = 1
+            if ti.math.isnan(v[0]) or ti.math.isnan(v[1]) or ti.math.isnan(v[2]):
+                bad = 1
+            if ti.math.isinf(v[0]) or ti.math.isinf(v[1]) or ti.math.isinf(v[2]):
+                bad = 1
+            ti.atomic_add(self._state_nan_count[None], bad)
+
+    @ti.kernel
+    def compute_vertex_energies(self, gx: ti.f32, gy: ti.f32, gz: ti.f32):
+        self._energy_kinetic[None] = 0.0
+        self._energy_grav[None] = 0.0
+        for i in self.x:
+            ke = 0.5 * self.mass[i] * self.v[i].dot(self.v[i])
+            pe = -self.mass[i] * (self.x[i][0] * gx + self.x[i][1] * gy + self.x[i][2] * gz)
+            ti.atomic_add(self._energy_kinetic[None], ke)
+            ti.atomic_add(self._energy_grav[None], pe)
+
+    @ti.kernel
+    def compute_elastic_energy(self, material_type: ti.i32, mu: ti.f32, lmbda: ti.f32):
+        self._energy_elastic[None] = 0.0
+        for e in range(self.num_tris):
+            tri = self.tris[e]
+            i0, i1, i2 = tri[0], tri[1], tri[2]
+            x0 = self.x[i0]
+            x1 = self.x[i1]
+            x2 = self.x[i2]
+            Ds = ti.Matrix.cols([x1 - x0, x2 - x0])
+            F = Ds @ self.dm_inv[e]
+            psi = stvk_energy_density_tri(F, mu, lmbda)
+            ti.atomic_add(self._energy_elastic[None], self.rest_area[e] * psi)
+
+    @ti.kernel
     def add_bending_forces(self, bend_k: ti.f32, bend_damping: ti.f32):
         for e in range(self.num_bend_edges):
             i0 = self.bend_edges[e][0]
@@ -426,6 +472,29 @@ class ClothSystem:
 
     def advance_sim_time(self, dt: float) -> None:
         self._sim_time += dt
+
+    def compute_energy_breakdown(self, cfg, solver) -> dict[str, float]:
+        gx, gy, gz = cfg.gravity
+        mu = float(solver.model.mu)
+        lmbda = float(solver.model.lmbda)
+        mt = int(solver.model.model_type.value)
+        self.compute_vertex_energies(gx, gy, gz)
+        self.compute_elastic_energy(mt, mu, lmbda)
+        ke = float(self._energy_kinetic[None])
+        grav = float(self._energy_grav[None])
+        elastic = float(self._energy_elastic[None])
+        potential = grav + elastic
+        return {
+            "kinetic": ke,
+            "potential": potential,
+            "potential_gravity": grav,
+            "potential_elastic": elastic,
+            "total": ke + potential,
+        }
+
+    def is_state_finite(self) -> bool:
+        self.check_state_finite()
+        return int(self._state_nan_count[None]) == 0
 
     def set_collision_world(self, world: CollisionWorld | None) -> None:
         self.collision_world = world

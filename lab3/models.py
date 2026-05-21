@@ -68,3 +68,35 @@ def stvk_first_piola_tri(F, mu, lmbda):
     trG = G.trace()
     S = 2.0 * mu * G + lmbda * trG * I2
     return F @ S
+
+
+@ti.func
+def stvk_energy_density(F, mu, lmbda):
+    I = ti.Matrix.identity(ti.f32, 3)
+    E = 0.5 * (F.transpose() @ F - I)
+    tr_e = E.trace()
+    return mu * (E * E).sum() + 0.5 * lmbda * tr_e * tr_e
+
+
+@ti.func
+def neo_hookean_energy_density(F, mu, lmbda):
+    J = F.determinant()
+    J_safe = ti.max(J, 1.0e-8)
+    log_j = ti.log(J_safe)
+    return 0.5 * mu * ((F * F).sum() - 3.0) - mu * log_j + 0.5 * lmbda * log_j * log_j
+
+
+@ti.func
+def corotated_energy_density(F, mu, lmbda):
+    U, sig, V = ti.svd(F)
+    R = U @ V.transpose()
+    J = F.determinant()
+    return mu * ((F - R) * (F - R)).sum() + 0.5 * lmbda * (J - 1.0) * (J - 1.0)
+
+
+@ti.func
+def stvk_energy_density_tri(F, mu, lmbda):
+    I2 = ti.Matrix.identity(ti.f32, 2)
+    E = 0.5 * (F.transpose() @ F - I2)
+    tr_e = E.trace()
+    return mu * (E * E).sum() + 0.5 * lmbda * tr_e * tr_e

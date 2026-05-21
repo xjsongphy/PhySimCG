@@ -4,7 +4,14 @@ import taichi as ti
 from lab3.collision import CollisionWorld
 from lab3.constants import ConstraintMode, FEMConfig
 from lab3.mesh import build_box_tet_mesh, extract_unique_edges
-from lab3.models import corotated_first_piola, neo_hookean_first_piola, stvk_first_piola
+from lab3.models import (
+    corotated_first_piola,
+    neo_hookean_first_piola,
+    stvk_first_piola,
+    stvk_energy_density,
+    neo_hookean_energy_density,
+    corotated_energy_density,
+)
 
 
 @ti.data_oriented
@@ -36,6 +43,13 @@ class FEMSystem:
         self.drag_vertex_idx[None] = -1
         self.drag_all[None] = 0
         self.drag_force[None] = ti.Vector([0.0, 0.0, 0.0])
+
+        self._energy_kinetic = ti.field(ti.f32, shape=())
+        self._energy_grav = ti.field(ti.f32, shape=())
+        self._energy_elastic = ti.field(ti.f32, shape=())
+        self._state_nan_count = ti.field(ti.i32, shape=())
+        self._grad = ti.Vector.field(3, dtype=ti.f32, shape=self.num_vertices)
+        self._y_ref = ti.Vector.field(3, dtype=ti.f32, shape=self.num_vertices)
 
         self.drag_stiffness = 800.0
         self.drag_damping = 15.0
@@ -235,6 +249,90 @@ class FEMSystem:
                 self.f[i] += self.drag_force[None]
 
     @ti.kernel
+    def check_state_finite(self):
+        self._state_nan_count[None] = 0
+        for i in self.x:
+            x = self.x[i]
+            v = self.v[i]
+            bad = 0
+            if ti.math.isnan(x[0]) or ti.math.isnan(x[1]) or ti.math.isnan(x[2]):
+                bad = 1
+            if ti.math.isinf(x[0]) or ti.math.isinf(x[1]) or ti.math.isinf(x[2]):
+                bad = 1
+            if ti.math.isnan(v[0]) or ti.math.isnan(v[1]) or ti.math.isnan(v[2]):
+                bad = 1
+            if ti.math.isinf(v[0]) or ti.math.isinf(v[1]) or ti.math.isinf(v[2]):
+                bad = 1
+            ti.atomic_add(self._state_nan_count[None], bad)
+
+    @ti.kernel
+    def compute_vertex_energies(self, gx: ti.f32, gy: ti.f32, gz: ti.f32):
+        self._energy_kinetic[None] = 0.0
+        self._energy_grav[None] = 0.0
+        for i in self.x:
+            ke = 0.5 * self.mass[i] * self.v[i].dot(self.v[i])
+            pe = -self.mass[i] * (self.x[i][0] * gx + self.x[i][1] * gy + self.x[i][2] * gz)
+            ti.atomic_add(self._energy_kinetic[None], ke)
+            ti.atomic_add(self._energy_grav[None], pe)
+
+    @ti.kernel
+    def compute_elastic_energy(self, material_type: ti.i32, mu: ti.f32, lmbda: ti.f32):
+        self._energy_elastic[None] = 0.0
+        for e in range(self.num_tets):
+            tet = self.tets[e]
+            i0, i1, i2, i3 = tet[0], tet[1], tet[2], tet[3]
+            x0 = self.x[i0]
+            x1 = self.x[i1]
+            x2 = self.x[i2]
+            x3 = self.x[i3]
+            Ds = ti.Matrix.cols([x1 - x0, x2 - x0, x3 - x0])
+            F = Ds @ self.dm_inv[e]
+            psi = 0.0
+            if material_type == 0:
+                psi = stvk_energy_density(F, mu, lmbda)
+            elif material_type == 1:
+                psi = neo_hookean_energy_density(F, mu, lmbda)
+            else:
+                psi = corotated_energy_density(F, mu, lmbda)
+            ti.atomic_add(self._energy_elastic[None], self.rest_volume[e] * psi)
+
+    @ti.kernel
+    def compute_force_and_gradient(self, material_type: ti.i32, mu: ti.f32, lmbda: ti.f32, inv_dt2: ti.f32):
+        for i in self.f:
+            self.f[i] = ti.Vector([0.0, 0.0, 0.0])
+        for e in range(self.num_tets):
+            tet = self.tets[e]
+            i0, i1, i2, i3 = tet[0], tet[1], tet[2], tet[3]
+            x0 = self.x[i0]
+            x1 = self.x[i1]
+            x2 = self.x[i2]
+            x3 = self.x[i3]
+            Ds = ti.Matrix.cols([x1 - x0, x2 - x0, x3 - x0])
+            F = Ds @ self.dm_inv[e]
+            P = ti.Matrix.zero(ti.f32, 3, 3)
+            if material_type == 0:
+                P = stvk_first_piola(F, mu, lmbda)
+            elif material_type == 1:
+                P = neo_hookean_first_piola(F, mu, lmbda)
+            else:
+                P = corotated_first_piola(F, mu, lmbda)
+            H = -self.rest_volume[e] * P @ self.dm_inv[e].transpose()
+            f1 = ti.Vector([H[0, 0], H[1, 0], H[2, 0]])
+            f2 = ti.Vector([H[0, 1], H[1, 1], H[2, 1]])
+            f3 = ti.Vector([H[0, 2], H[1, 2], H[2, 2]])
+            f0 = -(f1 + f2 + f3)
+            for c in ti.static(range(3)):
+                ti.atomic_add(self.f[i0][c], f0[c])
+                ti.atomic_add(self.f[i1][c], f1[c])
+                ti.atomic_add(self.f[i2][c], f2[c])
+                ti.atomic_add(self.f[i3][c], f3[c])
+        for i in self.x:
+            g = ti.Vector([0.0, 0.0, 0.0])
+            if self.fixed[i] == 0:
+                g = self.mass[i] * inv_dt2 * (self.x[i] - self._y_ref[i]) - self.f[i]
+            self._grad[i] = g
+
+    @ti.kernel
     def build_line_points(self):
         for e in range(self.num_edges):
             i0 = self.edge_indices[2 * e]
@@ -403,6 +501,29 @@ class FEMSystem:
 
     def advance_sim_time(self, dt: float) -> None:
         self._sim_time += dt
+
+    def compute_energy_breakdown(self, cfg, solver) -> dict[str, float]:
+        gx, gy, gz = cfg.gravity
+        mu = float(solver.model.mu)
+        lmbda = float(solver.model.lmbda)
+        mt = int(solver.model.model_type.value)
+        self.compute_vertex_energies(gx, gy, gz)
+        self.compute_elastic_energy(mt, mu, lmbda)
+        ke = float(self._energy_kinetic[None])
+        grav = float(self._energy_grav[None])
+        elastic = float(self._energy_elastic[None])
+        potential = grav + elastic
+        return {
+            "kinetic": ke,
+            "potential": potential,
+            "potential_gravity": grav,
+            "potential_elastic": elastic,
+            "total": ke + potential,
+        }
+
+    def is_state_finite(self) -> bool:
+        self.check_state_finite()
+        return int(self._state_nan_count[None]) == 0
 
     def set_collision_world(self, world: CollisionWorld | None) -> None:
         self.collision_world = world

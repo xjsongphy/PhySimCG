@@ -71,16 +71,11 @@ class ExplicitFEMSolver(BaseFEMSolver):
 
 
 class ImplicitNewtonCGSolver(BaseFEMSolver):
-    def _evaluate_gradient(self, x: np.ndarray, y: np.ndarray, inv_dt2: float) -> np.ndarray:
+    def _evaluate_gradient(self, x: np.ndarray, inv_dt2: float) -> np.ndarray:
         self.system.set_positions_numpy(x)
-        f_int = self.system.evaluate_internal_force_numpy(
-            int(self.model.model_type.value), self.model.mu, self.model.lmbda
-        )
-        m = self.system.get_masses_numpy()[:, None]
-        grad = m * inv_dt2 * (x - y) - f_int
-        fixed = self.system.get_fixed_numpy()
-        grad[fixed] = 0.0
-        return grad
+        mt = int(self.model.model_type.value)
+        self.system.compute_force_and_gradient(mt, self.model.mu, self.model.lmbda, inv_dt2)
+        return self.system._grad.to_numpy()
 
     def _cg_solve(self, hvp, b: np.ndarray, x0: np.ndarray, tol: float, max_iters: int) -> np.ndarray:
         x = x0.copy()
@@ -115,8 +110,10 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
         y = x_n + dt * (v_n + dt * g[None, :])
         y[fixed] = x_n[fixed]
 
+        self.system._y_ref.from_numpy(y.astype(np.float32))
+
         x = x_n.copy()
-        grad = self._evaluate_gradient(x, y, inv_dt2)
+        grad = self._evaluate_gradient(x, inv_dt2)
 
         for _ in range(self.config.newton_max_iters):
             free_mask = ~fixed
@@ -131,7 +128,7 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
                 p = p_flat.reshape((-1, 3)).copy()
                 p[fixed] = 0.0
                 x_perturb = x + eps * p
-                grad_perturb = self._evaluate_gradient(x_perturb, y, inv_dt2)
+                grad_perturb = self._evaluate_gradient(x_perturb, inv_dt2)
                 hv = (grad_perturb - grad) / eps
                 hv[fixed] = 0.0
                 return hv.reshape(-1)
@@ -151,7 +148,7 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
             for _ in range(8):
                 x_trial = x + alpha * delta
                 x_trial[fixed] = x_n[fixed]
-                grad_trial = self._evaluate_gradient(x_trial, y, inv_dt2)
+                grad_trial = self._evaluate_gradient(x_trial, inv_dt2)
                 if np.linalg.norm(grad_trial[free_mask]) <= np.linalg.norm(grad[free_mask]):
                     x = x_trial
                     grad = grad_trial
