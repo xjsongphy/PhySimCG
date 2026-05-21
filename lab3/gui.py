@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 import imageio
-from typing import Callable
+from typing import Callable, Mapping
 
 from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
@@ -16,7 +16,8 @@ from lab3.models import CorotatedModel, NeoHookeanModel, StVKModel
 from lab3.solver import BaseFEMSolver, ExplicitFEMSolver, ImplicitNewtonCGSolver
 
 
-AnalysisEnergyFn = Callable[[FEMSystem, FEMConfig, BaseFEMSolver], float]
+AnalysisEnergyBreakdown = Mapping[str, float] | float
+AnalysisEnergyFn = Callable[[FEMSystem, FEMConfig, BaseFEMSolver], AnalysisEnergyBreakdown]
 
 
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
@@ -281,7 +282,7 @@ def _corotated_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
     return float(mu * np.sum((F - R) * (F - R)) + 0.5 * lmbda * (J - 1.0) * (J - 1.0))
 
 
-def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> float:
+def compute_model_energy_breakdown(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> dict[str, float]:
     x = system.x.to_numpy()
     v = system.v.to_numpy()
     mass = system.mass.to_numpy()
@@ -317,7 +318,19 @@ def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFE
             F = Ds @ dm_inv[e]
             elastic += float(rest_area[e]) * _stvk_energy_density(F, mu, lmbda)
 
-    return kinetic + gravitational + elastic
+    potential = gravitational + elastic
+    total = kinetic + potential
+    return {
+        "kinetic": kinetic,
+        "potential": potential,
+        "potential_gravity": gravitational,
+        "potential_elastic": elastic,
+        "total": total,
+    }
+
+
+def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> float:
+    return compute_model_energy_breakdown(system, cfg, solver)["total"]
 
 
 _compute_total_energy = compute_model_total_energy
@@ -426,12 +439,25 @@ def _log_analysis_sample(
 ) -> None:
     if logger is None:
         return
-    total_energy = energy_fn(system, cfg, solver)
+    energy = energy_fn(system, cfg, solver)
+    if isinstance(energy, Mapping):
+        kinetic_energy = float(energy.get("kinetic", 0.0))
+        potential_gravity = float(energy.get("potential_gravity", 0.0))
+        potential_elastic = float(energy.get("potential_elastic", 0.0))
+        potential_energy = float(energy.get("potential", potential_gravity + potential_elastic))
+        total_energy = float(energy.get("total", kinetic_energy + potential_energy))
+    else:
+        kinetic_energy = float("nan")
+        potential_gravity = float("nan")
+        potential_elastic = float("nan")
+        potential_energy = float("nan")
+        total_energy = float(energy)
     solver_name = "implicit" if cfg.use_implicit else "explicit"
     logger.info(
         "ANALYSIS demo=%s scene=%s scenario=%s t=%.8f solver=%s mesh=%s elements=%d constraint=%s "
         "dt=%.8g substeps=%d material=%s density=%.8g youngs=%.8g poisson=%.8g damping=%.8g "
-        "gravity=(%.8g,%.8g,%.8g) collision=%s collision_objects=%s total_energy=%.12g",
+        "gravity=(%.8g,%.8g,%.8g) collision=%s collision_objects=%s kinetic_energy=%.12g "
+        "potential_energy=%.12g potential_gravity=%.12g potential_elastic=%.12g total_energy=%.12g",
         demo_name,
         scene_style,
         scenario,
@@ -452,6 +478,10 @@ def _log_analysis_sample(
         float(cfg.gravity[2]),
         bool(cfg.enable_collision),
         _collision_summary(system),
+        kinetic_energy,
+        potential_energy,
+        potential_gravity,
+        potential_elastic,
         total_energy,
     )
 
