@@ -12,7 +12,12 @@ def run(debug: bool = False, safe_boot: bool = False):
     logger = create_lab3_logger(debug)
     ti.init(arch=ti.cpu if safe_boot else ti.gpu)
 
-    defaults = SoftBodyDefaults()
+    defaults = SoftBodyDefaults(
+        gravity=(0.0, -9.8, 0.0),
+        damping=0.9995,
+        dt=5.0e-3,
+        substeps=1,
+    )
     config = defaults.make_config(
         use_implicit=False,
         constraint_mode=ConstraintMode.FREE,
@@ -60,6 +65,13 @@ def run(debug: bool = False, safe_boot: bool = False):
     ui_cfg.parameters.show_newton_iters = False
     ui_cfg.parameters.show_cg_iters = False
     # Keep material selector visible for B3 experimentation.
+    slider_ranges = {
+        "dt": (1.0e-3, 1.0e-2),
+        "damping": (0.98, 1.0),
+        "youngs": (1.0e3, 8.0e4),
+        "poisson": (0.05, 0.45),
+        "gravity_y": (-15.0, 0.0),
+    }
 
     system, solver = _rebuild("Low")
     run_gui(
@@ -73,6 +85,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         logger=logger,
         debug=debug,
         defaults=defaults,
+        slider_ranges=slider_ranges,
         show_softbody_scenarios=False,
         whole_body_drag=True,
     )
