@@ -192,10 +192,24 @@ class ClothSystem:
             nx, ny = self._nx, self._ny
             left = ny * (nx + 1)
             right = (ny + 1) * (nx + 1) - 1
-            span = float(pts[right, 0] - pts[left, 0])
-            inset = self.config.cloth_anchor_inset_ratio * span
-            pts[left, 0] += inset
-            pts[right, 0] -= inset
+            x_min = float(pts[left, 0])
+            x_max = float(pts[right, 0])
+            width = x_max - x_min
+            inset = self.config.cloth_anchor_inset_ratio * width
+            target_min = x_min + inset
+            target_max = x_max - inset
+            target_span = max(1.0e-6, target_max - target_min)
+
+            sag_amp = self.config.cloth_anchor_sag_ratio * width
+            # Map the whole cloth to the shorter anchor span and add a smooth
+            # initial sag so excess length is released by bending, not overlap.
+            for j in range(ny + 1):
+                row = j * (nx + 1)
+                for i in range(nx + 1):
+                    idx = row + i
+                    u = i / max(1, nx)
+                    pts[idx, 0] = target_min + u * target_span
+                    pts[idx, 1] = pts[idx, 1] - sag_amp * np.sin(np.pi * u)
         return pts
 
     def _pin_row0(self, nx: int) -> np.ndarray:

@@ -68,11 +68,16 @@ class FEMConfig:
     cloth_bend_damping: float = 2.0
     # For TWO_CORNERS_INSET mode: inward offset ratio for each top corner.
     cloth_anchor_inset_ratio: float = 0.15
+    # Initial sag amount for TWO_CORNERS_INSET mode as a fraction of cloth width.
+    cloth_anchor_sag_ratio: float = 0.12
 
     # Boundary vibration (B1 bonus): fixed vertices sinusoidal vibration
     enable_boundary_vibration: bool = False
     boundary_vibration_amplitude: float = 0.1
     boundary_vibration_frequency: float = 2.0
+    enable_side_stretch: bool = False
+    side_stretch_amplitude: float = 0.2
+    side_stretch_frequency: float = 2.0
 
 
 @dataclass(slots=True)

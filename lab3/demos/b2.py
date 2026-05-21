@@ -54,10 +54,18 @@ def run(debug: bool = False, safe_boot: bool = False):
     ui_cfg.parameters.show_material_text = False
 
     system, solver = _rebuild("Low")
+    cloth_slider_ranges = {
+        "dt": (5.0e-4, 5.0e-3),
+        "damping": (0.95, 1.0),
+        "youngs": (10.0, 1.0e3),
+        "poisson": (0.05, 0.45),
+        "gravity_y": (-15.0, 0.0),
+    }
     run_gui(
         system,
         solver,
         config,
+        demo_name="b2",
         ui_cfg=ui_cfg,
         mesh_presets=None,
         rebuild_sim=None,
@@ -68,6 +76,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         cloth_density_range=(density_min, density_max),
         cloth_density_current=cloth_density,
         on_cloth_density_change=_rebuild_density,
+        slider_ranges=cloth_slider_ranges,
     )
 
 

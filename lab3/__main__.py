@@ -6,6 +6,7 @@ DEMOS = {
     "b1": "lab3.demos.b1",
     "b2": "lab3.demos.b2",
     "b3": "lab3.demos.b3",
+    "b4": "lab3.demos.b4",
 }
 
 

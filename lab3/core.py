@@ -44,6 +44,8 @@ class FEMSystem:
         # Boundary vibration state
         self._sim_time = 0.0
         self._boundary_rest_y = ti.field(dtype=ti.f32, shape=self.num_vertices)
+        self._boundary_rest_x = ti.field(dtype=ti.f32, shape=self.num_vertices)
+        self._x_center = float(points[:, 0].mean())
 
         self._init_from_numpy(points, tets, edges)
         self._rest_positions_np = self.x.to_numpy()
@@ -94,6 +96,8 @@ class FEMSystem:
         # Store rest Y positions for fixed vertices (for vibration)
         boundary_rest_y_np = points[:, 1].copy()
         self._boundary_rest_y.from_numpy(boundary_rest_y_np)
+        boundary_rest_x_np = points[:, 0].copy()
+        self._boundary_rest_x.from_numpy(boundary_rest_x_np)
 
     def _pin_top(self, y: np.ndarray, y_max: float, tol: float) -> np.ndarray:
         pinned = np.zeros(self.num_vertices, dtype=np.int32)
@@ -194,6 +198,15 @@ class FEMSystem:
             if self.fixed[i] == 1:
                 offset = amplitude * ti.sin(frequency * t)
                 self.x[i].y = self._boundary_rest_y[i] + offset
+                self.v[i] = ti.Vector([0.0, 0.0, 0.0])
+
+    @ti.kernel
+    def apply_side_boundary_stretch(self, t: ti.f32, amplitude: ti.f32, frequency: ti.f32, x_center: ti.f32):
+        for i in self.x:
+            if self.fixed[i] == 1:
+                sgn = ti.select(self._boundary_rest_x[i] >= x_center, 1.0, -1.0)
+                offset = sgn * amplitude * ti.sin(frequency * t)
+                self.x[i].x = self._boundary_rest_x[i] + offset
                 self.v[i] = ti.Vector([0.0, 0.0, 0.0])
 
     @ti.kernel
@@ -313,6 +326,9 @@ class FEMSystem:
         self.f.fill(0.0)
         self.end_drag()
         self._sim_time = 0.0
+        # Refresh boundary rest references to current rest shape.
+        self._boundary_rest_x.from_numpy(self._rest_positions_np[:, 0].copy())
+        self._boundary_rest_y.from_numpy(self._rest_positions_np[:, 1].copy())
 
     def get_sim_time(self) -> float:
         return self._sim_time

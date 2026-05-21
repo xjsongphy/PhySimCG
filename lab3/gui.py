@@ -8,11 +8,15 @@ import os
 import shutil
 import tempfile
 import imageio
+from typing import Callable
 
 from lab3.constants import ConstraintMode, FEMConfig, GUIVisibilityConfig, MaterialType
 from lab3.core import FEMSystem
 from lab3.models import CorotatedModel, NeoHookeanModel, StVKModel
 from lab3.solver import BaseFEMSolver, ExplicitFEMSolver, ImplicitNewtonCGSolver
+
+
+AnalysisEnergyFn = Callable[[FEMSystem, FEMConfig, BaseFEMSolver], float]
 
 
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
@@ -120,10 +124,10 @@ def _cursor_over_gui(cx: float, cy: float) -> bool:
     if 0.02 - m <= cx <= 0.26 + m and 0.72 - m <= cy <= 0.98 + m:
         return True
 
-    # Controls: sub_window(..., 0.02, 0.20, 0.26, 0.56)
-    # x: [0.02, 0.28], y_top: 0.20, y_bottom: 0.20+0.56=0.76
-    # Transformed y: [1-0.76, 1-0.20] = [0.24, 0.80]
-    if 0.02 - m <= cx <= 0.28 + m and 0.24 - m <= cy <= 0.80 + m:
+    # Controls: sub_window(..., 0.72, 0.02, 0.26, 0.56)
+    # x: [0.72, 0.98], y_top: 0.20, y_bottom: 0.20+0.56=0.76
+    # Transformed y: [1-0.58, 1-0.02] = [0.42, 0.98]
+    if 0.72 - m <= cx <= 0.98 + m and 0.42 - m <= cy <= 0.98 + m:
         return True
 
     # Render: sub_window(..., 0.30, 0.02, 0.18, 0.20)
@@ -159,10 +163,304 @@ def _save_gif_from_dir(tmp_dir, fps=15):
     print(f"[record] GIF saved: {out} ({len(frames)} frames, {frames[0].shape[1]}x{frames[0].shape[0]}px)")
 
 
+def _collision_world_enabled(cw) -> bool:
+    return any(col.enabled for col in cw.planes) or any(col.enabled for col in cw.spheres) or any(col.enabled for col in cw.aabbs)
+
+
+def _sync_collision_enabled(cfg: FEMConfig, system: FEMSystem) -> None:
+    if hasattr(system, "collision_world") and system.collision_world is not None:
+        cfg.enable_collision = _collision_world_enabled(system.collision_world)
+
+
+def _draw_plane_grid(scene, normal: np.ndarray, offset: float, color=(0.5, 0.5, 0.5)) -> None:
+    pts = []
+    if abs(normal[1]) > 0.9:
+        y = offset
+        for i in range(-10, 11):
+            pts.append([-10.0 + i, y, -10.0])
+            pts.append([-10.0 + i, y, 10.0])
+            pts.append([-10.0, y, -10.0 + i])
+            pts.append([10.0, y, -10.0 + i])
+    elif abs(normal[0]) > 0.9:
+        x = offset
+        for i in range(-10, 11):
+            pts.append([x, -10.0 + i, -10.0])
+            pts.append([x, -10.0 + i, 10.0])
+            pts.append([x, -10.0, -10.0 + i])
+            pts.append([x, 10.0, -10.0 + i])
+    if pts:
+        scene.lines(np.asarray(pts, dtype=np.float32), width=2.0, color=color)
+
+
+def _draw_sphere_wire(scene, center: np.ndarray, radius: float, color=(1.0, 0.4, 0.4)) -> None:
+    c = np.asarray(center, dtype=np.float32)
+    phi = np.linspace(0.0, 2.0 * np.pi, 64, endpoint=True)
+    rings = [
+        np.column_stack((np.full_like(phi, c[0]), c[1] + radius * np.cos(phi), c[2] + radius * np.sin(phi))),
+        np.column_stack((c[0] + radius * np.cos(phi), np.full_like(phi, c[1]), c[2] + radius * np.sin(phi))),
+        np.column_stack((c[0] + radius * np.cos(phi), c[1] + radius * np.sin(phi), np.full_like(phi, c[2]))),
+    ]
+    for ring in rings:
+        scene.lines(ring.astype(np.float32), width=2.0, color=color)
+
+
+def _draw_aabb_wire(scene, bmin: np.ndarray, bmax: np.ndarray, color=(1.0, 0.6, 0.2)) -> None:
+    bmin = np.asarray(bmin, dtype=np.float32)
+    bmax = np.asarray(bmax, dtype=np.float32)
+    pts = np.asarray(
+        [
+            [bmin[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmin[2]],
+            [bmax[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmax[2]],
+            [bmax[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmax[2]],
+            [bmin[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmin[2]],
+            [bmin[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmin[2]],
+            [bmax[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmax[2]],
+            [bmax[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmax[2]],
+            [bmin[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmin[2]],
+            [bmin[0], bmin[1], bmin[2]], [bmin[0], bmax[1], bmin[2]],
+            [bmax[0], bmin[1], bmin[2]], [bmax[0], bmax[1], bmin[2]],
+            [bmax[0], bmin[1], bmax[2]], [bmax[0], bmax[1], bmax[2]],
+            [bmin[0], bmin[1], bmax[2]], [bmin[0], bmax[1], bmax[2]],
+        ],
+        dtype=np.float32,
+    )
+    scene.lines(pts, width=3.0, color=color)
+
+
+def _draw_collision_controls(panel, cfg: FEMConfig, system: FEMSystem, logger: logging.Logger | None) -> None:
+    if not hasattr(system, "collision_world") or system.collision_world is None:
+        return
+
+    cw = system.collision_world
+    panel.text("--- Collision Objects ---")
+    changed = False
+    if len(cw.planes) > 0:
+        enabled = panel.checkbox("Ground Plane", bool(cw.planes[0].enabled))
+        if enabled != cw.planes[0].enabled:
+            cw.planes[0].enabled = enabled
+            changed = True
+    if len(cw.planes) > 1:
+        enabled = panel.checkbox("Wall Plane", bool(cw.planes[1].enabled))
+        if enabled != cw.planes[1].enabled:
+            cw.planes[1].enabled = enabled
+            changed = True
+    if len(cw.spheres) > 0:
+        enabled = panel.checkbox("Sphere", bool(cw.spheres[0].enabled))
+        if enabled != cw.spheres[0].enabled:
+            cw.spheres[0].enabled = enabled
+            changed = True
+    if len(cw.aabbs) > 0:
+        enabled = panel.checkbox("Box", bool(cw.aabbs[0].enabled))
+        if enabled != cw.aabbs[0].enabled:
+            cw.aabbs[0].enabled = enabled
+            changed = True
+
+    _sync_collision_enabled(cfg, system)
+    panel.text(f"Collision: {'on' if cfg.enable_collision else 'off'}")
+    if changed and logger is not None:
+        logger.info("Collision toggled -> %s", cfg.enable_collision)
+
+
+def _stvk_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
+    dim = F.shape[1]
+    E = 0.5 * (F.T @ F - np.eye(dim, dtype=np.float32))
+    tr_e = float(np.trace(E))
+    return float(mu * np.sum(E * E) + 0.5 * lmbda * tr_e * tr_e)
+
+
+def _neo_hookean_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
+    J = max(float(np.linalg.det(F)), 1.0e-8)
+    log_j = np.log(J)
+    return float(0.5 * mu * (np.sum(F * F) - 3.0) - mu * log_j + 0.5 * lmbda * log_j * log_j)
+
+
+def _corotated_energy_density(F: np.ndarray, mu: float, lmbda: float) -> float:
+    U, _, Vt = np.linalg.svd(F)
+    R = U @ Vt
+    J = float(np.linalg.det(F))
+    return float(mu * np.sum((F - R) * (F - R)) + 0.5 * lmbda * (J - 1.0) * (J - 1.0))
+
+
+def compute_model_total_energy(system: FEMSystem, cfg: FEMConfig, solver: BaseFEMSolver) -> float:
+    x = system.x.to_numpy()
+    v = system.v.to_numpy()
+    mass = system.mass.to_numpy()
+    kinetic = 0.5 * float(np.sum(mass[:, None] * v * v))
+    gravity = np.asarray(cfg.gravity, dtype=np.float32)
+    gravitational = -float(np.sum(mass * (x @ gravity)))
+
+    mu = float(solver.model.mu)
+    lmbda = float(solver.model.lmbda)
+    elastic = 0.0
+    if hasattr(system, "tets"):
+        tets = system.tets.to_numpy()
+        dm_inv = system.dm_inv.to_numpy()
+        rest_volume = system.rest_volume.to_numpy()
+        for e, tet in enumerate(tets):
+            x0, x1, x2, x3 = x[tet[0]], x[tet[1]], x[tet[2]], x[tet[3]]
+            Ds = np.column_stack((x1 - x0, x2 - x0, x3 - x0)).astype(np.float32)
+            F = Ds @ dm_inv[e]
+            if cfg.material_type == MaterialType.STVK:
+                psi = _stvk_energy_density(F, mu, lmbda)
+            elif cfg.material_type == MaterialType.NEO_HOOKEAN:
+                psi = _neo_hookean_energy_density(F, mu, lmbda)
+            else:
+                psi = _corotated_energy_density(F, mu, lmbda)
+            elastic += float(rest_volume[e]) * psi
+    elif hasattr(system, "tris"):
+        tris = system.tris.to_numpy()
+        dm_inv = system.dm_inv.to_numpy()
+        rest_area = system.rest_area.to_numpy()
+        for e, tri in enumerate(tris):
+            x0, x1, x2 = x[tri[0]], x[tri[1]], x[tri[2]]
+            Ds = np.column_stack((x1 - x0, x2 - x0)).astype(np.float32)
+            F = Ds @ dm_inv[e]
+            elastic += float(rest_area[e]) * _stvk_energy_density(F, mu, lmbda)
+
+    return kinetic + gravitational + elastic
+
+
+_compute_total_energy = compute_model_total_energy
+
+
+def _mesh_density_label(system: FEMSystem, cfg: FEMConfig, mesh_name: str) -> str:
+    if hasattr(system, "_nx") and hasattr(system, "_ny"):
+        return f"{mesh_name}:nx={int(system._nx)},ny={int(system._ny)},verts={int(system.num_vertices)}"
+    return (
+        f"{mesh_name}:wx={int(cfg.wx)},wy={int(cfg.wy)},wz={int(cfg.wz)},"
+        f"cell={float(cfg.cell_size):.6g},verts={int(system.num_vertices)}"
+    )
+
+
+def _collision_summary(system: FEMSystem) -> str:
+    if not hasattr(system, "collision_world") or system.collision_world is None:
+        return "none"
+    cw = system.collision_world
+    enabled = []
+    for i, col in enumerate(cw.planes):
+        if col.enabled:
+            enabled.append(f"plane{i}")
+    for i, col in enumerate(cw.spheres):
+        if col.enabled:
+            enabled.append(f"sphere{i}")
+    for i, col in enumerate(cw.aabbs):
+        if col.enabled:
+            enabled.append(f"aabb{i}")
+    return ",".join(enabled) if enabled else "all_off"
+
+
+def _system_element_count(system: FEMSystem) -> int:
+    if hasattr(system, "num_tets"):
+        return int(system.num_tets)
+    if hasattr(system, "num_tris"):
+        return int(system.num_tris)
+    return 0
+
+
+def _log_sim_config(
+    logger: logging.Logger | None,
+    event: str,
+    demo_name: str,
+    scene_style: str,
+    mesh_name: str,
+    scenario: str,
+    system: FEMSystem,
+    cfg: FEMConfig,
+    solver: BaseFEMSolver,
+    analysis_mode: bool,
+) -> None:
+    if logger is None:
+        return
+    solver_name = "implicit" if cfg.use_implicit else "explicit"
+    logger.info(
+        "CONFIG event=%s demo=%s scene=%s scenario=%s analysis=%s solver=%s mesh=%s elements=%d "
+        "constraint=%s dt=%.8g substeps=%d material=%s density=%.8g youngs=%.8g poisson=%.8g damping=%.8g "
+        "gravity=(%.8g,%.8g,%.8g) newton_iters=%d cg_iters=%d boundary_vibration=%s "
+        "boundary_amp=%.8g boundary_freq=%.8g side_stretch=%s side_amp=%.8g side_freq=%.8g "
+        "collision=%s collision_objects=%s collision_k=%.8g collision_c=%.8g collision_radius=%.8g",
+        event,
+        demo_name,
+        scene_style,
+        scenario,
+        analysis_mode,
+        solver_name,
+        _mesh_density_label(system, cfg, mesh_name),
+        _system_element_count(system),
+        cfg.constraint_mode.name,
+        float(cfg.dt),
+        int(cfg.substeps),
+        cfg.material_type.name,
+        float(cfg.density),
+        float(cfg.youngs_modulus),
+        float(cfg.poisson_ratio),
+        float(cfg.damping),
+        float(cfg.gravity[0]),
+        float(cfg.gravity[1]),
+        float(cfg.gravity[2]),
+        int(cfg.newton_max_iters),
+        int(cfg.cg_max_iters),
+        bool(cfg.enable_boundary_vibration),
+        float(cfg.boundary_vibration_amplitude),
+        float(cfg.boundary_vibration_frequency),
+        bool(cfg.enable_side_stretch),
+        float(cfg.side_stretch_amplitude),
+        float(cfg.side_stretch_frequency),
+        bool(cfg.enable_collision),
+        _collision_summary(system),
+        float(cfg.collision_k),
+        float(cfg.collision_c),
+        float(cfg.collision_particle_radius),
+    )
+
+
+def _log_analysis_sample(
+    logger: logging.Logger | None,
+    demo_name: str,
+    scene_style: str,
+    mesh_name: str,
+    scenario: str,
+    system: FEMSystem,
+    cfg: FEMConfig,
+    solver: BaseFEMSolver,
+    energy_fn: AnalysisEnergyFn,
+) -> None:
+    if logger is None:
+        return
+    total_energy = energy_fn(system, cfg, solver)
+    solver_name = "implicit" if cfg.use_implicit else "explicit"
+    logger.info(
+        "ANALYSIS demo=%s scene=%s scenario=%s t=%.8f solver=%s mesh=%s elements=%d constraint=%s "
+        "dt=%.8g substeps=%d material=%s density=%.8g youngs=%.8g poisson=%.8g damping=%.8g "
+        "gravity=(%.8g,%.8g,%.8g) collision=%s collision_objects=%s total_energy=%.12g",
+        demo_name,
+        scene_style,
+        scenario,
+        float(system.get_sim_time()) if hasattr(system, "get_sim_time") else 0.0,
+        solver_name,
+        _mesh_density_label(system, cfg, mesh_name),
+        _system_element_count(system),
+        cfg.constraint_mode.name,
+        float(cfg.dt),
+        int(cfg.substeps),
+        cfg.material_type.name,
+        float(cfg.density),
+        float(cfg.youngs_modulus),
+        float(cfg.poisson_ratio),
+        float(cfg.damping),
+        float(cfg.gravity[0]),
+        float(cfg.gravity[1]),
+        float(cfg.gravity[2]),
+        bool(cfg.enable_collision),
+        _collision_summary(system),
+        total_energy,
+    )
+
+
 def run_gui(
     system: FEMSystem,
     solver: BaseFEMSolver,
     cfg: FEMConfig,
+    demo_name: str = "unknown",
     ui_cfg: GUIVisibilityConfig | None = None,
     mesh_presets: dict[str, dict] | None = None,
     rebuild_sim=None,
@@ -173,6 +471,8 @@ def run_gui(
     cloth_density_range: tuple[int, int] | None = None,
     cloth_density_current: int | None = None,
     on_cloth_density_change=None,
+    slider_ranges: dict[str, tuple[float, float]] | None = None,
+    analysis_energy_fn: AnalysisEnergyFn = compute_model_total_energy,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -211,7 +511,10 @@ def run_gui(
     # 'none' / 'gui' / 'orbit'
     rmb_action = "none"
     constraint_idx = int(cfg.constraint_mode.value)
+    softbody_scenario = "Side Stretch" if cfg.enable_side_stretch else "Default"
     current_mesh_name = next(iter(mesh_presets.keys())) if mesh_presets else ""
+    if not current_mesh_name and cloth_density_current is not None:
+        current_mesh_name = f"Density{int(cloth_density_current)}"
     target_fps = 120.0
     frame_dt = 1.0 / target_fps
     last_frame_t = time.perf_counter()
@@ -222,6 +525,8 @@ def run_gui(
     _record_dir = None
     _record_count = 0
     _record_frame = 0
+    analysis_mode = False
+    _log_sim_config(logger, "start", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
 
     while window.running:
         frame_begin_t = time.perf_counter()
@@ -348,6 +653,7 @@ def run_gui(
             g.text("SPACE: pause/resume")
             if g.button("Reset Sim"):
                 system.reset_state()
+                _log_sim_config(logger, "reset_sim", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
             if g.button("Stop GIF" if _recording else "Record GIF"):
                 if not _recording:
                     _recording = True
@@ -362,7 +668,46 @@ def run_gui(
                     _record_count = 0
             if _recording:
                 g.text(f"  REC {_record_count}")
+            new_analysis_mode = g.checkbox("Analysis Log", analysis_mode)
+            if new_analysis_mode != analysis_mode:
+                analysis_mode = new_analysis_mode
+                _log_sim_config(
+                    logger,
+                    "analysis_on" if analysis_mode else "analysis_off",
+                    demo_name,
+                    scene_style,
+                    current_mesh_name,
+                    softbody_scenario,
+                    system,
+                    cfg,
+                    solver,
+                    analysis_mode,
+                )
             if not is_cloth:
+                g.text("Scenario:")
+                if g.button("Default"):
+                    softbody_scenario = "Default"
+                    cfg.enable_side_stretch = False
+                    cfg.enable_boundary_vibration = False
+                    if cfg.constraint_mode != ConstraintMode.TOP:
+                        cfg.constraint_mode = ConstraintMode.TOP
+                        system.set_constraint_mode(ConstraintMode.TOP)
+                        system.reset_state()
+                    if logger is not None:
+                        logger.info("Scenario switched: Default")
+                    _log_sim_config(logger, "scenario_default", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                if g.button("Side Stretch"):
+                    softbody_scenario = "Side Stretch"
+                    cfg.enable_side_stretch = True
+                    cfg.enable_boundary_vibration = False
+                    if cfg.constraint_mode != ConstraintMode.SIDE_X_BOTH:
+                        cfg.constraint_mode = ConstraintMode.SIDE_X_BOTH
+                        system.set_constraint_mode(ConstraintMode.SIDE_X_BOTH)
+                        system.reset_state()
+                    if logger is not None:
+                        logger.info("Scenario switched: Side Stretch")
+                    _log_sim_config(logger, "scenario_side_stretch", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                g.text(f"Current: {softbody_scenario}")
                 g.text("Constraint:")
                 new_constraint_idx = constraint_idx
                 for i, name in enumerate(_CONSTRAINT_NAMES):
@@ -372,15 +717,18 @@ def run_gui(
                     constraint_idx = int(new_constraint_idx)
                     system.set_constraint_mode(ConstraintMode(constraint_idx))
                     system.reset_state()
+                    _log_sim_config(logger, "constraint_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
                 g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
             else:
                 g.text("Constraint (Cloth):")
                 if g.button("Single Corner"):
                     system.set_constraint_mode(ConstraintMode.SINGLE_CORNER)
                     system.reset_state()
+                    _log_sim_config(logger, "constraint_single_corner", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
                 if g.button("Two Inset Anchors"):
                     system.set_constraint_mode(ConstraintMode.TWO_CORNERS_INSET)
                     system.reset_state()
+                    _log_sim_config(logger, "constraint_two_inset", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
                 g.text(_CONSTRAINT_DESC.get(int(cfg.constraint_mode.value), ""))
                 if cloth_density_range is not None and on_cloth_density_change is not None and cloth_density_current is not None:
                     dmin, dmax = cloth_density_range
@@ -388,7 +736,9 @@ def run_gui(
                     if int(new_density) != int(cloth_density_current):
                         system, solver = on_cloth_density_change(int(new_density))
                         cloth_density_current = int(new_density)
+                        current_mesh_name = f"Density{cloth_density_current}"
                         constraint_idx = int(cfg.constraint_mode.value)
+                        _log_sim_config(logger, "cloth_density_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
             if mesh_presets and rebuild_sim is not None:
                 g.text("Mesh:")
                 g.text(f"Current: {current_mesh_name}")
@@ -401,11 +751,13 @@ def run_gui(
                         if is_cloth and cloth_density_current is not None and hasattr(system, "_nx"):
                             cloth_density_current = int(system._nx)
                         constraint_idx = int(cfg.constraint_mode.value)
+                        _sync_collision_enabled(cfg, system)
+                        _log_sim_config(logger, "mesh_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
 
         # --- Controls panel ---
         p = ui_cfg.parameters
         if p.show_panel:
-            with gui.sub_window("Controls", 0.02, 0.20, 0.26, 0.56) as panel:
+            with gui.sub_window("Controls", 0.72, 0.02, 0.26, 0.56) as panel:
                 panel.text("=== Simulation ===")
 
                 if p.show_paused:
@@ -419,8 +771,19 @@ def run_gui(
 
                 # --- Time Integration ---
                 panel.text("--- Time ---")
+                dt_min, dt_max = (1.0e-2, 5.0e-2)
+                damp_min, damp_max = (0.90, 1.0)
+                youngs_min, youngs_max = (1.0e3, 8.0e4)
+                pois_min, pois_max = (0.05, 0.45)
+                gy_min, gy_max = (-9.8, 0.0)
+                if slider_ranges is not None:
+                    dt_min, dt_max = slider_ranges.get("dt", (dt_min, dt_max))
+                    damp_min, damp_max = slider_ranges.get("damping", (damp_min, damp_max))
+                    youngs_min, youngs_max = slider_ranges.get("youngs", (youngs_min, youngs_max))
+                    pois_min, pois_max = slider_ranges.get("poisson", (pois_min, pois_max))
+                    gy_min, gy_max = slider_ranges.get("gravity_y", (gy_min, gy_max))
                 if p.show_dt:
-                    cfg.dt = panel.slider_float("dt", cfg.dt, 1.0e-2, 5.0e-2)
+                    cfg.dt = panel.slider_float("dt", cfg.dt, dt_min, dt_max)
                     # Show stability hint
                     if not cfg.use_implicit:
                         # Estimate stability limit: dt_critical ≈ h / sqrt(E/rho)
@@ -445,11 +808,11 @@ def run_gui(
                 # --- Material Properties ---
                 panel.text("--- Material ---")
                 if p.show_damping:
-                    cfg.damping = panel.slider_float("damping", cfg.damping, 0.90, 1.0)
+                    cfg.damping = panel.slider_float("damping", cfg.damping, damp_min, damp_max)
                 if p.show_youngs:
-                    cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, 1.0e3, 8.0e4)
+                    cfg.youngs_modulus = panel.slider_float("Young's", cfg.youngs_modulus, youngs_min, youngs_max)
                 if p.show_poisson:
-                    cfg.poisson_ratio = panel.slider_float("Poisson", cfg.poisson_ratio, 0.05, 0.45)
+                    cfg.poisson_ratio = panel.slider_float("Poisson", cfg.poisson_ratio, pois_min, pois_max)
 
                 # --- Drag Force (Interaction) ---
                 panel.text("--- Drag Force ---")
@@ -464,8 +827,10 @@ def run_gui(
                 # --- Environment ---
                 panel.text("--- Environment ---")
                 if p.show_gravity_y:
-                    gy = panel.slider_float("gravity_y", cfg.gravity[1], -9.8, 0.0)
+                    gy = panel.slider_float("gravity_y", cfg.gravity[1], gy_min, gy_max)
                     cfg.gravity = (cfg.gravity[0], gy, cfg.gravity[2])
+
+                _draw_collision_controls(panel, cfg, system, logger)
 
                 # --- Boundary Vibration (B1 bonus) ---
                 if p.show_boundary_vibration:
@@ -474,6 +839,10 @@ def run_gui(
                     if cfg.enable_boundary_vibration:
                         cfg.boundary_vibration_amplitude = panel.slider_float("Amplitude", cfg.boundary_vibration_amplitude, 0.0, 0.5)
                         cfg.boundary_vibration_frequency = panel.slider_float("Frequency", cfg.boundary_vibration_frequency, 0.5, 10.0)
+                    cfg.enable_side_stretch = panel.checkbox("Side Stretch", cfg.enable_side_stretch)
+                    if cfg.enable_side_stretch:
+                        cfg.side_stretch_amplitude = panel.slider_float("Stretch Amp", cfg.side_stretch_amplitude, 0.0, 0.8)
+                        cfg.side_stretch_frequency = panel.slider_float("Stretch Freq", cfg.side_stretch_frequency, 0.2, 10.0)
 
                 # --- Implicit Solver ---
                 panel.text("--- Implicit Solver ---")
@@ -494,6 +863,7 @@ def run_gui(
                         material_name = selected_name
                         _rebuild_model_from_ui(solver, cfg, material_name)
                         system.reset_state()
+                        _log_sim_config(logger, "material_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
 
                 if p.show_material_text:
                     panel.text(f"Material: {material_name}")
@@ -513,8 +883,10 @@ def run_gui(
                         solver.sync_material_from_config()
                         # Reset simulation
                         system.reset_state()
+                        _sync_collision_enabled(cfg, system)
                         if logger is not None:
                             logger.info("Reset to defaults")
+                        _log_sim_config(logger, "reset_defaults", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
 
         # --- Render panel ---
         r = ui_cfg.render
@@ -532,9 +904,22 @@ def run_gui(
 
         solver_dt = 0.0
         if not paused:
+            _sync_collision_enabled(cfg, system)
             step_t0 = time.perf_counter()
             solver.step()
             solver_dt = time.perf_counter() - step_t0
+            if analysis_mode:
+                _log_analysis_sample(
+                    logger,
+                    demo_name,
+                    scene_style,
+                    current_mesh_name,
+                    softbody_scenario,
+                    system,
+                    cfg,
+                    solver,
+                    analysis_energy_fn,
+                )
         scene.set_camera(camera)
         if show_lighting:
             scene.point_light(pos=(8, 12, 10), color=(1.0, 1.0, 1.0))
@@ -552,77 +937,18 @@ def run_gui(
         # Render collision objects
         if hasattr(system, "collision_world") and system.collision_world is not None:
             cw = system.collision_world
-            # Draw planes as gray grids
             for plane in cw.planes:
                 if not plane.enabled:
                     continue
-                n = plane.normal
-                o = plane.offset
-                # Create a large quad on the plane
-                if abs(n[1]) > 0.9:  # Horizontal plane (y = constant)
-                    y = o
-                    # Grid lines
-                    for i in range(-10, 11):
-                        x0, z0 = -10.0 + i, -10.0
-                        x1, z1 = -10.0 + i, 10.0
-                        scene.lines(np.array([[x0, y, z0], [x1, y, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
-                        x0, z0 = -10.0, -10.0 + i
-                        x1, z1 = 10.0, -10.0 + i
-                        scene.lines(np.array([[x0, y, z0], [x1, y, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
-                elif abs(n[0]) > 0.9:  # Vertical plane (x = constant)
-                    x = o
-                    for i in range(-10, 11):
-                        y0, z0 = -10.0 + i, -10.0
-                        y1, z1 = -10.0 + i, 10.0
-                        scene.lines(np.array([[x, y0, z0], [x, y1, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
-                        y0, z0 = -10.0, -10.0 + i
-                        y1, z1 = 10.0, -10.0 + i
-                        scene.lines(np.array([[x, y0, z0], [x, y1, z1]], dtype=np.float32), width=2.0, color=(0.5, 0.5, 0.5))
-
-            # Draw spheres
+                _draw_plane_grid(scene, plane.normal, plane.offset)
             for sphere in cw.spheres:
                 if not sphere.enabled:
                     continue
-                c = sphere.center
-                r = sphere.radius
-                # Draw rings around the sphere
-                for axis in range(3):
-                    for angle_idx in range(8):
-                        theta = angle_idx * np.pi / 4
-                        pts = []
-                        for phi in np.linspace(0, 2 * np.pi, 32):
-                            if axis == 0:  # Ring in YZ plane
-                                p = [c[0] + r * np.cos(theta) * np.cos(phi), c[1] + r * np.sin(phi), c[2] + r * np.cos(theta) * np.sin(phi)]
-                            elif axis == 1:  # Ring in XZ plane
-                                p = [c[0] + r * np.cos(phi), c[1] + r * np.cos(theta) * np.sin(phi), c[2] + r * np.sin(theta) * np.sin(phi)]
-                            else:  # Ring in XY plane
-                                p = [c[0] + r * np.cos(phi), c[1] + r * np.sin(theta) * np.sin(phi), c[2] + r * np.cos(theta) * np.cos(phi)]
-                            pts.append(p)
-                        pts = np.array(pts, dtype=np.float32)
-                        scene.lines(pts, width=2.0, color=(1.0, 0.4, 0.4))
-
-            # Draw AABB boxes
+                _draw_sphere_wire(scene, sphere.center, sphere.radius)
             for aabb in cw.aabbs:
                 if not aabb.enabled:
                     continue
-                bmin = np.array(aabb.bmin, dtype=np.float32)
-                bmax = np.array(aabb.bmax, dtype=np.float32)
-                edges = [
-                    [[bmin[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmin[2]]],
-                    [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmax[2]]],
-                    [[bmax[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmax[2]]],
-                    [[bmin[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmin[2]]],
-                    [[bmin[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
-                    [[bmax[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmax[2]]],
-                    [[bmax[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmax[2]]],
-                    [[bmin[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmin[2]]],
-                    [[bmin[0], bmin[1], bmin[2]], [bmin[0], bmax[1], bmin[2]]],
-                    [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
-                    [[bmax[0], bmin[1], bmax[2]], [bmax[0], bmax[1], bmax[2]]],
-                    [[bmin[0], bmin[1], bmax[2]], [bmin[0], bmax[1], bmax[2]]],
-                ]
-                for edge in edges:
-                    scene.lines(np.array(edge, dtype=np.float32), width=3.0, color=(1.0, 0.6, 0.2))
+                _draw_aabb_wire(scene, aabb.bmin, aabb.bmax)
 
         canvas.scene(scene)
         # Capture frame for GIF recording

@@ -36,6 +36,7 @@ def run(debug: bool = False, safe_boot: bool = False):
     ui_cfg.parameters.show_material_text = False
     ui_cfg.parameters.show_newton_iters = False
     ui_cfg.parameters.show_cg_iters = False
+    ui_cfg.parameters.show_boundary_vibration = True
 
     def _rebuild(name: str):
         p = mesh_presets[name]
@@ -50,6 +51,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         system,
         solver,
         config,
+        demo_name="basic",
         ui_cfg=ui_cfg,
         mesh_presets=mesh_presets,
         rebuild_sim=_rebuild,

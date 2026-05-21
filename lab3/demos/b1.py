@@ -2,7 +2,7 @@ import taichi as ti
 
 from lab3.constants import GUIVisibilityConfig, SoftBodyDefaults
 from lab3.core import FEMSystem
-from lab3.gui import run_gui
+from lab3.gui import compute_model_total_energy, run_gui
 from lab3.logging_utils import create_lab3_logger
 from lab3.solver import ExplicitFEMSolver
 
@@ -53,12 +53,14 @@ def run(debug: bool = False, safe_boot: bool = False):
         system,
         solver,
         config,
+        demo_name="b1",
         ui_cfg=ui_cfg,
         mesh_presets=mesh_presets,
         rebuild_sim=_rebuild,
         logger=logger,
         debug=debug,
         defaults=defaults,
+        analysis_energy_fn=compute_model_total_energy,
     )
 
 

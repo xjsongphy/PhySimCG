@@ -54,6 +54,10 @@ class ExplicitFEMSolver(BaseFEMSolver):
         if self.config.enable_boundary_vibration and hasattr(self.system, "apply_boundary_vibration"):
             t = self.system.get_sim_time()
             self.system.apply_boundary_vibration(t, self.config.boundary_vibration_amplitude, self.config.boundary_vibration_frequency)
+        if self.config.enable_side_stretch and hasattr(self.system, "apply_side_boundary_stretch"):
+            t = self.system.get_sim_time()
+            x_center = getattr(self.system, "_x_center", 0.0)
+            self.system.apply_side_boundary_stretch(t, self.config.side_stretch_amplitude, self.config.side_stretch_frequency, x_center)
         if self.config.enable_builtin_ground:
             self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)
         self.system.advance_sim_time(dt_sub)
@@ -100,10 +104,7 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
             rs_old = rs_new
         return x
 
-    def step(self) -> None:
-        self.sync_material_from_config()
-
-        dt = self.config.dt
+    def _substep(self, dt: float) -> None:
         inv_dt2 = 1.0 / (dt * dt)
         damping = self.config.damping
         g = np.array(self.config.gravity, dtype=np.float32)
@@ -167,3 +168,11 @@ class ImplicitNewtonCGSolver(BaseFEMSolver):
         self.system.set_velocities_numpy(v_new)
         if self.config.enable_builtin_ground:
             self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)
+        self.system.advance_sim_time(dt)
+
+    def step(self) -> None:
+        self.sync_material_from_config()
+        n_substeps = max(1, int(self.config.substeps))
+        dt_sub = self.config.dt / n_substeps
+        for _ in range(n_substeps):
+            self._substep(dt_sub)
