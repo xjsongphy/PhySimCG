@@ -394,6 +394,10 @@ def _system_element_count(system: FEMSystem) -> int:
     return 0
 
 
+def _system_state_is_finite(system: FEMSystem) -> bool:
+    return bool(np.isfinite(system.x.to_numpy()).all() and np.isfinite(system.v.to_numpy()).all())
+
+
 def _log_sim_config(
     logger: logging.Logger | None,
     event: str,
@@ -850,7 +854,7 @@ def run_gui(
 
                 # --- Time Integration ---
                 panel.text("--- Time ---")
-                dt_min, dt_max = (1.0e-2, 5.0e-2)
+                dt_min, dt_max = (1.0e-4, 5.0e-3)
                 damp_min, damp_max = (0.90, 1.0)
                 youngs_min, youngs_max = (1.0e3, 8.0e4)
                 pois_min, pois_max = (0.05, 0.45)
@@ -1029,7 +1033,31 @@ def run_gui(
             step_t0 = time.perf_counter()
             solver.step()
             solver_dt = time.perf_counter() - step_t0
-            if analysis_mode:
+            if not _system_state_is_finite(system):
+                if logger is not None:
+                    logger.warning(
+                        "Non-finite simulation state detected; resetting and pausing demo=%s mesh=%s dt=%.8g substeps=%d",
+                        demo_name,
+                        current_mesh_name,
+                        float(cfg.dt),
+                        int(cfg.substeps),
+                    )
+                system.reset_state()
+                _sync_collision_enabled(cfg, system)
+                paused = True
+                _log_sim_config(
+                    logger,
+                    "nonfinite_reset",
+                    demo_name,
+                    scene_style,
+                    current_mesh_name,
+                    softbody_scenario,
+                    system,
+                    cfg,
+                    solver,
+                    analysis_mode,
+                )
+            elif analysis_mode:
                 _log_analysis_sample(
                     logger,
                     demo_name,
