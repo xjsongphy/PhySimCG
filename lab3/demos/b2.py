@@ -1,7 +1,7 @@
 import taichi as ti
 
 from lab3.cloth import ClothSystem
-from lab3.constants import ClothDefaults, GUIVisibilityConfig, MaterialType
+from lab3.constants import ClothDefaults, ConstraintMode, GUIVisibilityConfig, MaterialType
 from lab3.gui import run_gui
 from lab3.logging_utils import create_lab3_logger
 from lab3.solver import ExplicitFEMSolver
@@ -12,24 +12,36 @@ def run(debug: bool = False, safe_boot: bool = False):
     ti.init(arch=ti.cpu if safe_boot else ti.gpu)
 
     defaults = ClothDefaults()
+    cloth_size = (2.8, 2.8)
     config = defaults.make_config(
         material_type=MaterialType.STVK,
         use_implicit=False,
+        constraint_mode=ConstraintMode.SINGLE_CORNER,
     )
     mesh_presets = {
-        "Low": {"nx": 16, "ny": 16},
-        "Med": {"nx": 24, "ny": 24},
-        "High": {"nx": 32, "ny": 32},
+        "Low": {"nx": 10, "ny": 10},
+        "Med": {"nx": 14, "ny": 14},
+        "High": {"nx": 20, "ny": 20},
     }
     if safe_boot:
         mesh_presets = {"Low": mesh_presets["Low"]}
         config.substeps = min(config.substeps, 2)
         logger.warning("Safe boot enabled: using CPU backend, Low mesh only, substeps<=2")
+    density_min, density_max = 8, 28
+    cloth_density = mesh_presets["Low"]["nx"]
 
     def _rebuild(name: str):
         p = mesh_presets[name]
         logger.info("Rebuild b2 mesh=%s nx=%d ny=%d", name, p["nx"], p["ny"])
-        s = ClothSystem(config=config, nx=p["nx"], ny=p["ny"], sx=2.0, sy=2.0)
+        s = ClothSystem(config=config, nx=p["nx"], ny=p["ny"], sx=cloth_size[0], sy=cloth_size[1])
+        so = ExplicitFEMSolver(s, config)
+        return s, so
+
+    def _rebuild_density(n: int):
+        nonlocal cloth_density
+        cloth_density = max(density_min, min(density_max, int(n)))
+        logger.info("Rebuild b2 density nx=ny=%d", cloth_density)
+        s = ClothSystem(config=config, nx=cloth_density, ny=cloth_density, sx=cloth_size[0], sy=cloth_size[1])
         so = ExplicitFEMSolver(s, config)
         return s, so
 
@@ -47,11 +59,15 @@ def run(debug: bool = False, safe_boot: bool = False):
         solver,
         config,
         ui_cfg=ui_cfg,
-        mesh_presets=mesh_presets,
-        rebuild_sim=_rebuild,
+        mesh_presets=None,
+        rebuild_sim=None,
         logger=logger,
         debug=debug,
         defaults=defaults,
+        scene_style="cloth",
+        cloth_density_range=(density_min, density_max),
+        cloth_density_current=cloth_density,
+        on_cloth_density_change=_rebuild_density,
     )
 
 

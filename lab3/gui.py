@@ -16,13 +16,15 @@ from lab3.solver import BaseFEMSolver, ExplicitFEMSolver, ImplicitNewtonCGSolver
 
 
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
-_CONSTRAINT_NAMES = ["Top Fixed", "Side Fixed", "Both Sides Fixed", "Top+Bottom Fixed"]
+_CONSTRAINT_NAMES = ["Top Fixed", "Side Fixed", "Both Sides Fixed", "Top+Bottom Fixed", "Single Corner Fixed"]
 _CAMERA_FOV_DEG = 60.0
 _CONSTRAINT_DESC = {
     0: "Top fixed, rest free.",
     1: "Single x-min side fixed, body can bend.",
     2: "Both x sides fixed, middle deforms.",
     3: "Top and bottom fixed, middle layer is freer.",
+    4: "Single corner fixed.",
+    5: "Two top corners fixed with inward anchor offset.",
 }
 
 
@@ -167,6 +169,10 @@ def run_gui(
     logger: logging.Logger | None = None,
     debug: bool = False,
     defaults=None,
+    scene_style: str = "softbody",
+    cloth_density_range: tuple[int, int] | None = None,
+    cloth_density_current: int | None = None,
+    on_cloth_density_change=None,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -180,6 +186,14 @@ def run_gui(
     cam_pitch = 0.25
     cam_dist = 11.0
     cam_pos = np.array([9.0, 5.0, 12.0], dtype=np.float32)
+    is_cloth = scene_style == "cloth"
+    if is_cloth:
+        cam_target = np.array([1.0, 1.2, 1.0], dtype=np.float32)
+        cam_yaw = -1.25
+        cam_pitch = 0.4
+        cam_dist = 4.8
+        cam_pos = np.array([3.5, 2.2, 4.8], dtype=np.float32)
+    cloth_surface_mode = False
 
     paused = False
     material_name = _MATERIAL_NAMES[_material_index_from_type(cfg.material_type)]
@@ -231,6 +245,8 @@ def run_gui(
         if lmb and not prev_lmb:
             if over_gui or not in_window:
                 lmb_action = "gui"
+            elif is_cloth and cloth_surface_mode:
+                lmb_action = "camera"
             elif ray is not None:
                 system.begin_drag(ray[0], ray[1])
                 if int(system.drag_vertex_idx[None]) >= 0:
@@ -346,16 +362,33 @@ def run_gui(
                     _record_count = 0
             if _recording:
                 g.text(f"  REC {_record_count}")
-            g.text("Constraint:")
-            new_constraint_idx = constraint_idx
-            for i, name in enumerate(_CONSTRAINT_NAMES):
-                if g.button(name):
-                    new_constraint_idx = i
-            if new_constraint_idx != constraint_idx:
-                constraint_idx = int(new_constraint_idx)
-                system.set_constraint_mode(ConstraintMode(constraint_idx))
-                system.reset_state()
-            g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
+            if not is_cloth:
+                g.text("Constraint:")
+                new_constraint_idx = constraint_idx
+                for i, name in enumerate(_CONSTRAINT_NAMES):
+                    if g.button(name):
+                        new_constraint_idx = i
+                if new_constraint_idx != constraint_idx:
+                    constraint_idx = int(new_constraint_idx)
+                    system.set_constraint_mode(ConstraintMode(constraint_idx))
+                    system.reset_state()
+                g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
+            else:
+                g.text("Constraint (Cloth):")
+                if g.button("Single Corner"):
+                    system.set_constraint_mode(ConstraintMode.SINGLE_CORNER)
+                    system.reset_state()
+                if g.button("Two Inset Anchors"):
+                    system.set_constraint_mode(ConstraintMode.TWO_CORNERS_INSET)
+                    system.reset_state()
+                g.text(_CONSTRAINT_DESC.get(int(cfg.constraint_mode.value), ""))
+                if cloth_density_range is not None and on_cloth_density_change is not None and cloth_density_current is not None:
+                    dmin, dmax = cloth_density_range
+                    new_density = g.slider_int("Density", int(cloth_density_current), dmin, dmax)
+                    if int(new_density) != int(cloth_density_current):
+                        system, solver = on_cloth_density_change(int(new_density))
+                        cloth_density_current = int(new_density)
+                        constraint_idx = int(cfg.constraint_mode.value)
             if mesh_presets and rebuild_sim is not None:
                 g.text("Mesh:")
                 g.text(f"Current: {current_mesh_name}")
@@ -365,6 +398,8 @@ def run_gui(
                         if logger is not None:
                             logger.info("Rebuild sim mesh=%s", name)
                         system, solver = rebuild_sim(name)
+                        if is_cloth and cloth_density_current is not None and hasattr(system, "_nx"):
+                            cloth_density_current = int(system._nx)
                         constraint_idx = int(cfg.constraint_mode.value)
 
         # --- Controls panel ---
@@ -492,6 +527,8 @@ def run_gui(
                     show_wireframe = g.checkbox("Wireframe", show_wireframe)
                 if r.show_lighting:
                     show_lighting = g.checkbox("Lighting", show_lighting)
+                if is_cloth:
+                    cloth_surface_mode = g.checkbox("Surface Cloth", cloth_surface_mode)
 
         solver_dt = 0.0
         if not paused:
@@ -504,8 +541,10 @@ def run_gui(
             scene.ambient_light((0.3, 0.3, 0.3))
         else:
             scene.ambient_light((1.0, 1.0, 1.0))
-        if show_particles:
+        if show_particles and not cloth_surface_mode:
             scene.particles(system.x, radius=0.05, color=(0.2, 0.7, 1.0))
+        if is_cloth and cloth_surface_mode and hasattr(system, "tri_indices"):
+            scene.mesh(vertices=system.x, indices=system.tri_indices, color=(0.45, 0.7, 0.9), two_sided=True)
         if show_wireframe:
             system.build_line_points()
             scene.lines(system.line_points, width=1.0, color=(0.85, 0.85, 0.9))
@@ -544,8 +583,6 @@ def run_gui(
             for sphere in cw.spheres:
                 if not sphere.enabled:
                     continue
-                # Draw sphere as a mesh (simplified: use particles for visualization)
-                # Create a simple wireframe representation
                 c = sphere.center
                 r = sphere.radius
                 # Draw rings around the sphere
@@ -570,19 +607,15 @@ def run_gui(
                     continue
                 bmin = np.array(aabb.bmin, dtype=np.float32)
                 bmax = np.array(aabb.bmax, dtype=np.float32)
-                # Draw box edges
                 edges = [
-                    # Bottom face
                     [[bmin[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmin[2]]],
                     [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmin[1], bmax[2]]],
                     [[bmax[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmax[2]]],
                     [[bmin[0], bmin[1], bmax[2]], [bmin[0], bmin[1], bmin[2]]],
-                    # Top face
                     [[bmin[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
                     [[bmax[0], bmax[1], bmin[2]], [bmax[0], bmax[1], bmax[2]]],
                     [[bmax[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmax[2]]],
                     [[bmin[0], bmax[1], bmax[2]], [bmin[0], bmax[1], bmin[2]]],
-                    # Vertical edges
                     [[bmin[0], bmin[1], bmin[2]], [bmin[0], bmax[1], bmin[2]]],
                     [[bmax[0], bmin[1], bmin[2]], [bmax[0], bmax[1], bmin[2]]],
                     [[bmax[0], bmin[1], bmax[2]], [bmax[0], bmax[1], bmax[2]]],
