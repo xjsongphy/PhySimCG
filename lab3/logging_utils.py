@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -27,7 +28,9 @@ def create_lab3_logger(debug: bool) -> logging.Logger:
 
     log_dir = Path("lab3/logs")
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "runtime.log"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = log_dir / f"runtime_{timestamp}.log"
+    latest_log_path = log_dir / "runtime.log"
 
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 
@@ -35,6 +38,11 @@ def create_lab3_logger(debug: bool) -> logging.Logger:
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
+
+    latest_fh = FSyncFileHandler(latest_log_path, mode="w", encoding="utf-8")
+    latest_fh.setLevel(logging.DEBUG)
+    latest_fh.setFormatter(fmt)
+    logger.addHandler(latest_fh)
 
     if RichHandler is not None:
         rh = RichHandler(
@@ -54,4 +62,5 @@ def create_lab3_logger(debug: bool) -> logging.Logger:
         logger.addHandler(sh)
 
     logger.info("Logging to %s", log_path.resolve())
+    logger.info("Latest log mirror: %s", latest_log_path.resolve())
     return logger
