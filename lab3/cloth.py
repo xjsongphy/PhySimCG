@@ -231,6 +231,7 @@ class ClothSystem:
             ConstraintMode.TOP_BOTTOM: lambda: self._pin_top_bottom(y, y_min, y_max, tol),
             ConstraintMode.SINGLE_CORNER: lambda: self._pin_single_corner(nx, ny),
             ConstraintMode.TWO_CORNERS_INSET: lambda: self._pin_two_corners_inset(nx, ny),
+            ConstraintMode.FREE: lambda: np.zeros(self.num_vertices, dtype=np.int32),
         }
         pinned = dispatch.get(mode, lambda: self._pin_row0(nx))()
         self.fixed.from_numpy(pinned)

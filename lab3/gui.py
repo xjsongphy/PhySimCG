@@ -23,6 +23,7 @@ AnalysisEnergyFn = Callable[[FEMSystem, FEMConfig, BaseFEMSolver], AnalysisEnerg
 _MATERIAL_NAMES = ["StVK", "NeoHookean", "Corotated"]
 _CONSTRAINT_NAMES = ["Top Fixed", "Side Fixed", "Both Sides Fixed", "Top+Bottom Fixed", "Single Corner Fixed"]
 _CAMERA_FOV_DEG = 60.0
+_PLANE_PATCH_FIELDS = {}
 _CONSTRAINT_DESC = {
     0: "Top fixed, rest free.",
     1: "Single x-min side fixed, body can bend.",
@@ -173,24 +174,46 @@ def _sync_collision_enabled(cfg: FEMConfig, system: FEMSystem) -> None:
         cfg.enable_collision = _collision_world_enabled(system.collision_world)
 
 
-def _draw_plane_grid(scene, normal: np.ndarray, offset: float, color=(0.5, 0.5, 0.5)) -> None:
-    pts = []
+def _plane_patch_fields(kind: str):
+    if kind not in _PLANE_PATCH_FIELDS:
+        vertices = ti.Vector.field(3, dtype=ti.f32, shape=4)
+        indices = ti.field(dtype=ti.i32, shape=6)
+        indices.from_numpy(np.asarray([0, 1, 2, 0, 2, 3], dtype=np.int32))
+        _PLANE_PATCH_FIELDS[kind] = (vertices, indices)
+    return _PLANE_PATCH_FIELDS[kind]
+
+
+def _draw_plane_patch(scene, normal: np.ndarray, offset: float, color=(0.36, 0.42, 0.46)) -> None:
+    vertices = None
+    kind = ""
     if abs(normal[1]) > 0.9:
+        kind = "horizontal"
         y = offset
-        for i in range(-10, 11):
-            pts.append([-10.0 + i, y, -10.0])
-            pts.append([-10.0 + i, y, 10.0])
-            pts.append([-10.0, y, -10.0 + i])
-            pts.append([10.0, y, -10.0 + i])
+        vertices = np.asarray(
+            [
+                [-1.0, y, -1.0],
+                [9.0, y, -1.0],
+                [9.0, y, 3.0],
+                [-1.0, y, 3.0],
+            ],
+            dtype=np.float32,
+        )
     elif abs(normal[0]) > 0.9:
+        kind = "x"
         x = offset
-        for i in range(-10, 11):
-            pts.append([x, -10.0 + i, -10.0])
-            pts.append([x, -10.0 + i, 10.0])
-            pts.append([x, -10.0, -10.0 + i])
-            pts.append([x, 10.0, -10.0 + i])
-    if pts:
-        scene.lines(np.asarray(pts, dtype=np.float32), width=2.0, color=color)
+        vertices = np.asarray(
+            [
+                [x, 0.0, -1.0],
+                [x, 4.0, -1.0],
+                [x, 4.0, 3.0],
+                [x, 0.0, 3.0],
+            ],
+            dtype=np.float32,
+        )
+    if vertices is not None:
+        vertex_field, index_field = _plane_patch_fields(kind)
+        vertex_field.from_numpy(vertices)
+        scene.mesh(vertices=vertex_field, indices=index_field, color=color, two_sided=True)
 
 
 def _draw_sphere_wire(scene, center: np.ndarray, radius: float, color=(1.0, 0.4, 0.4)) -> None:
@@ -507,6 +530,8 @@ def run_gui(
     on_cloth_density_change=None,
     slider_ranges: dict[str, tuple[float, float]] | None = None,
     analysis_energy_fn: AnalysisEnergyFn = compute_model_total_energy,
+    show_softbody_scenarios: bool = True,
+    whole_body_drag: bool = False,
 ) -> None:
     if ui_cfg is None:
         ui_cfg = GUIVisibilityConfig()
@@ -546,6 +571,8 @@ def run_gui(
     rmb_action = "none"
     constraint_idx = int(cfg.constraint_mode.value)
     softbody_scenario = "Side Stretch" if cfg.enable_side_stretch else "Default"
+    if not show_softbody_scenarios and cfg.constraint_mode == ConstraintMode.FREE:
+        softbody_scenario = "Free"
     current_mesh_name = next(iter(mesh_presets.keys())) if mesh_presets else ""
     if not current_mesh_name and cloth_density_current is not None:
         current_mesh_name = f"Density{int(cloth_density_current)}"
@@ -594,6 +621,12 @@ def run_gui(
                 lmb_action = "gui"
             elif is_cloth and cloth_surface_mode:
                 lmb_action = "camera"
+            elif whole_body_drag and ray is not None and hasattr(system, "begin_drag_whole"):
+                system.begin_drag_whole(ray[0], ray[1])
+                if int(system.drag_vertex_idx[None]) >= 0:
+                    lmb_action = "particle"
+                else:
+                    lmb_action = "camera"
             elif ray is not None:
                 system.begin_drag(ray[0], ray[1])
                 if int(system.drag_vertex_idx[None]) >= 0:
@@ -726,41 +759,44 @@ def run_gui(
                     analysis_mode,
                 )
             if not is_cloth:
-                g.text("Scenario:")
-                if g.button("Default"):
-                    softbody_scenario = "Default"
-                    cfg.enable_side_stretch = False
-                    cfg.enable_boundary_vibration = False
-                    if cfg.constraint_mode != ConstraintMode.TOP:
-                        cfg.constraint_mode = ConstraintMode.TOP
-                        system.set_constraint_mode(ConstraintMode.TOP)
+                if show_softbody_scenarios:
+                    g.text("Scenario:")
+                    if g.button("Default"):
+                        softbody_scenario = "Default"
+                        cfg.enable_side_stretch = False
+                        cfg.enable_boundary_vibration = False
+                        if cfg.constraint_mode != ConstraintMode.TOP:
+                            cfg.constraint_mode = ConstraintMode.TOP
+                            system.set_constraint_mode(ConstraintMode.TOP)
+                            system.reset_state()
+                        if logger is not None:
+                            logger.info("Scenario switched: Default")
+                        _log_sim_config(logger, "scenario_default", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                    if g.button("Side Stretch"):
+                        softbody_scenario = "Side Stretch"
+                        cfg.enable_side_stretch = True
+                        cfg.enable_boundary_vibration = False
+                        if cfg.constraint_mode != ConstraintMode.SIDE_X_BOTH:
+                            cfg.constraint_mode = ConstraintMode.SIDE_X_BOTH
+                            system.set_constraint_mode(ConstraintMode.SIDE_X_BOTH)
+                            system.reset_state()
+                        if logger is not None:
+                            logger.info("Scenario switched: Side Stretch")
+                        _log_sim_config(logger, "scenario_side_stretch", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                    g.text(f"Current: {softbody_scenario}")
+                    g.text("Constraint:")
+                    new_constraint_idx = constraint_idx
+                    for i, name in enumerate(_CONSTRAINT_NAMES):
+                        if g.button(name):
+                            new_constraint_idx = i
+                    if new_constraint_idx != constraint_idx:
+                        constraint_idx = int(new_constraint_idx)
+                        system.set_constraint_mode(ConstraintMode(constraint_idx))
                         system.reset_state()
-                    if logger is not None:
-                        logger.info("Scenario switched: Default")
-                    _log_sim_config(logger, "scenario_default", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
-                if g.button("Side Stretch"):
-                    softbody_scenario = "Side Stretch"
-                    cfg.enable_side_stretch = True
-                    cfg.enable_boundary_vibration = False
-                    if cfg.constraint_mode != ConstraintMode.SIDE_X_BOTH:
-                        cfg.constraint_mode = ConstraintMode.SIDE_X_BOTH
-                        system.set_constraint_mode(ConstraintMode.SIDE_X_BOTH)
-                        system.reset_state()
-                    if logger is not None:
-                        logger.info("Scenario switched: Side Stretch")
-                    _log_sim_config(logger, "scenario_side_stretch", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
-                g.text(f"Current: {softbody_scenario}")
-                g.text("Constraint:")
-                new_constraint_idx = constraint_idx
-                for i, name in enumerate(_CONSTRAINT_NAMES):
-                    if g.button(name):
-                        new_constraint_idx = i
-                if new_constraint_idx != constraint_idx:
-                    constraint_idx = int(new_constraint_idx)
-                    system.set_constraint_mode(ConstraintMode(constraint_idx))
-                    system.reset_state()
-                    _log_sim_config(logger, "constraint_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
-                g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
+                        _log_sim_config(logger, "constraint_change", demo_name, scene_style, current_mesh_name, softbody_scenario, system, cfg, solver, analysis_mode)
+                    g.text(_CONSTRAINT_DESC.get(constraint_idx, ""))
+                else:
+                    g.text(f"Scenario: {softbody_scenario}")
             else:
                 g.text("Constraint (Cloth):")
                 if g.button("Single Corner"):
@@ -1025,7 +1061,7 @@ def run_gui(
             for plane in cw.planes:
                 if not plane.enabled:
                     continue
-                _draw_plane_grid(scene, plane.normal, plane.offset)
+                _draw_plane_patch(scene, plane.normal, plane.offset)
             for sphere in cw.spheres:
                 if not sphere.enabled:
                     continue

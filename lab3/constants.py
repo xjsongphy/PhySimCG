@@ -15,6 +15,7 @@ class ConstraintMode(IntEnum):
     TOP_BOTTOM = 3
     SINGLE_CORNER = 4
     TWO_CORNERS_INSET = 5
+    FREE = 6
 
 
 @dataclass(slots=True)

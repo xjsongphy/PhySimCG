@@ -31,8 +31,10 @@ class FEMSystem:
         self.edge_indices = ti.field(dtype=ti.i32, shape=self.num_edges * 2)
         self.line_points = ti.Vector.field(3, dtype=ti.f32, shape=self.num_edges * 2)
         self.drag_vertex_idx = ti.field(dtype=ti.i32, shape=())
+        self.drag_all = ti.field(dtype=ti.i32, shape=())
         self.drag_force = ti.Vector.field(3, dtype=ti.f32, shape=())
         self.drag_vertex_idx[None] = -1
+        self.drag_all[None] = 0
         self.drag_force[None] = ti.Vector([0.0, 0.0, 0.0])
 
         self.drag_stiffness = 800.0
@@ -125,6 +127,9 @@ class FEMSystem:
         pinned[idx] = 1
         return pinned
 
+    def _pin_free(self) -> np.ndarray:
+        return np.zeros(self.num_vertices, dtype=np.int32)
+
     def _apply_constraint_mode(self, points: np.ndarray, mode: ConstraintMode) -> None:
         x = points[:, 0]
         y = points[:, 1]
@@ -137,6 +142,7 @@ class FEMSystem:
             ConstraintMode.SIDE_X_BOTH: lambda: self._pin_side_x_both(x, x_min, x_max, tol),
             ConstraintMode.TOP_BOTTOM: lambda: self._pin_top_bottom(y, y_min, y_max, tol),
             ConstraintMode.SINGLE_CORNER: lambda: self._pin_single_corner(y),
+            ConstraintMode.FREE: self._pin_free,
         }
         pinned = dispatch.get(mode, dispatch[ConstraintMode.TOP])()
         self.fixed.from_numpy(pinned)
@@ -220,8 +226,13 @@ class FEMSystem:
     @ti.kernel
     def add_drag_force(self):
         idx = self.drag_vertex_idx[None]
-        if idx >= 0 and self.fixed[idx] == 0:
-            self.f[idx] += self.drag_force[None]
+        drag_all = self.drag_all[None]
+        for i in self.x:
+            if drag_all == 1:
+                if self.fixed[i] == 0:
+                    self.f[i] += self.mass[i] * self.drag_force[None]
+            elif i == idx and self.fixed[i] == 0:
+                self.f[i] += self.drag_force[None]
 
     @ti.kernel
     def build_line_points(self):
@@ -233,11 +244,13 @@ class FEMSystem:
 
     # Interaction placeholder interfaces (to be implemented later)
     def begin_drag(self, ray_origin, ray_dir) -> None:
+        self.drag_all[None] = 0
         origin = np.asarray(ray_origin, dtype=np.float32)
         direction = np.asarray(ray_dir, dtype=np.float32)
         direction_norm = np.linalg.norm(direction)
         if direction_norm < 1.0e-8:
             self.drag_vertex_idx[None] = -1
+            self.drag_all[None] = 0
             self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
             return
         direction = direction / direction_norm
@@ -273,8 +286,10 @@ class FEMSystem:
             _ = v_np  # keep local for future interaction extensions
 
     def begin_drag_vertex(self, vertex_idx: int, ray_origin, ray_dir) -> None:
+        self.drag_all[None] = 0
         if vertex_idx < 0 or vertex_idx >= self.num_vertices:
             self.drag_vertex_idx[None] = -1
+            self.drag_all[None] = 0
             self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
             return
         origin = np.asarray(ray_origin, dtype=np.float32)
@@ -282,6 +297,7 @@ class FEMSystem:
         n = np.linalg.norm(direction)
         if n < 1.0e-8:
             self.drag_vertex_idx[None] = -1
+            self.drag_all[None] = 0
             self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
             return
         direction /= n
@@ -293,9 +309,50 @@ class FEMSystem:
         self._drag_t = t
         self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
+    def begin_drag_whole(self, ray_origin, ray_dir) -> None:
+        origin = np.asarray(ray_origin, dtype=np.float32)
+        direction = np.asarray(ray_dir, dtype=np.float32)
+        direction_norm = np.linalg.norm(direction)
+        if direction_norm < 1.0e-8:
+            self.drag_vertex_idx[None] = -1
+            self.drag_all[None] = 0
+            self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            return
+        direction = direction / direction_norm
+
+        x_np = self.x.to_numpy()
+        r2 = self.pick_radius * self.pick_radius
+        hit = False
+        for i in range(self.num_vertices):
+            oc = origin - x_np[i]
+            b = float(np.dot(direction, oc))
+            c_term = float(np.dot(oc, oc) - r2)
+            disc = b * b - c_term
+            if disc < 0.0:
+                continue
+            sqrt_disc = np.sqrt(disc)
+            t0 = -b - sqrt_disc
+            t1 = -b + sqrt_disc
+            if t0 > 0.0 or t1 > 0.0:
+                hit = True
+                break
+
+        if not hit:
+            self.drag_vertex_idx[None] = -1
+            self.drag_all[None] = 0
+            self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            return
+
+        center = x_np.mean(axis=0)
+        self.drag_vertex_idx[None] = 0
+        self.drag_all[None] = 1
+        self._drag_t = max(0.0, float(np.dot(center - origin, direction)))
+        self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
     def drag_to(self, ray_origin, ray_dir) -> None:
         idx = int(self.drag_vertex_idx[None])
-        if idx < 0:
+        drag_all = int(self.drag_all[None]) == 1
+        if idx < 0 and not drag_all:
             return
         origin = np.asarray(ray_origin, dtype=np.float32)
         direction = np.asarray(ray_dir, dtype=np.float32)
@@ -307,12 +364,23 @@ class FEMSystem:
         target = origin + self._drag_t * direction
         x_np = self.x.to_numpy()
         v_np = self.v.to_numpy()
-        displacement = target - x_np[idx]
-        force = self.drag_stiffness * displacement - self.drag_damping * v_np[idx]
+        if drag_all:
+            fixed_np = self.fixed.to_numpy().astype(bool)
+            free = ~fixed_np
+            if not free.any():
+                return
+            center = x_np[free].mean(axis=0)
+            mean_v = v_np[free].mean(axis=0)
+            displacement = target - center
+            force = self.drag_stiffness * displacement - self.drag_damping * mean_v
+        else:
+            displacement = target - x_np[idx]
+            force = self.drag_stiffness * displacement - self.drag_damping * v_np[idx]
         self.drag_force[None] = force.astype(np.float32)
 
     def end_drag(self) -> None:
         self.drag_vertex_idx[None] = -1
+        self.drag_all[None] = 0
         self.drag_force[None] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
     def set_constraint_mode(self, mode: ConstraintMode) -> None:

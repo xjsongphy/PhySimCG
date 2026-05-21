@@ -1,7 +1,7 @@
 import taichi as ti
 
 from lab3.collision import CollisionWorld
-from lab3.constants import GUIVisibilityConfig, SoftBodyDefaults
+from lab3.constants import ConstraintMode, GUIVisibilityConfig, SoftBodyDefaults
 from lab3.core import FEMSystem
 from lab3.gui import run_gui
 from lab3.logging_utils import create_lab3_logger
@@ -15,6 +15,7 @@ def run(debug: bool = False, safe_boot: bool = False):
     defaults = SoftBodyDefaults()
     config = defaults.make_config(
         use_implicit=False,
+        constraint_mode=ConstraintMode.FREE,
         enable_collision=False,
         collision_k=3.0e4,
         collision_c=120.0,
@@ -72,6 +73,8 @@ def run(debug: bool = False, safe_boot: bool = False):
         logger=logger,
         debug=debug,
         defaults=defaults,
+        show_softbody_scenarios=False,
+        whole_body_drag=True,
     )
 
 
