@@ -9,6 +9,7 @@ dependencies = [
     "scikit-image>=0.26.0",
     "taichi>=1.7",
     "imageio>=2.0",
+    "matplotlib>=3.9",
 ]
 
 [build-system]
