@@ -334,6 +334,18 @@ Basic demo 展示标准 FEM 软体仿真的三项核心功能：边界振动、�
 
 ![B1 - Compression Energy](../demos/plots/energy_compression.png)
 
+**稳定性测试（同参数下对向振动）**
+
+![B1 - StVK](../demos/plots/b1stvk.png)
+
+![B1 - Neo-Hookean](../demos/plots/b1neo.png)
+
+![B1 - Corotated](../demos/plots/b1cor.png)
+
+- StVK：结构持续收缩，最终接近丝状形态。
+- Neo-Hookean：仿真在该测试条件下出现数值发散。
+- Corotated：整体形态保持稳定，未出现明显收缩。
+
 ### 4.3 布料模拟（B2）
 
 布料 demo 展示了 ClothSystem 在单角固定和双角锚定两种约束模式下的行为。
@@ -350,13 +362,21 @@ Basic demo 展示标准 FEM 软体仿真的三项核心功能：边界振动、�
 
 B3 demo 将软体置于 `FREE` 约束模式（无固定顶点），在重力作用下自由下落，与场景中的解析几何体发生碰撞。用户可通过 GUI 独立开关每种碰撞体，并使用整体拖拽功能移动软体。
 
-碰撞参数为：弹性刚度 `collision_k=3.0e4`，阻尼 `collision_c=120`，粒子碰撞半径 `collision_particle_radius=0.07`。这些参数在 Penalty 方法中需要仔细调节——刚度过低会导致明显的穿透，刚度过高则可能引发数值不稳定。
+**B3 交互展示**
+
+![B3 - Collision Demo](../demos/gif/b3+rubbish.gif)
+
+效果不太好，需要处理网格之间的互相穿透问题。
 
 ### 4.5 隐式积分（B4）
 
-B4 demo 运行 `ImplicitNewtonCGSolver`，使用 Corotated 材料和大时间步长（dt=0.01, substeps=1）。每个时间步内，通过 Newton 迭代求解非线性系统，并使用 CG 近似求解线性化系统。
+B4 demo 运行 `ImplicitNewtonCGSolver`，使用 Corotated 材料和大时间步长（dt=0.01, substeps=1）。每个时间步内，通过 Newton 迭代求解非线性系统，并使用 CG 近似求解线性化系统。这里的 low 和 high 指的是迭代步数设置的高低（Newton/CG iter steps）。
 
-隐式积分的显著优势在于：在等效子步 dt=0.01 下保持稳定，而显式积分在此步长下通常已发散。代价是每个时间步需要求解非线性系统，因此单步计算成本显著高于显式方法。
+**总能量**
+
+![B4 - Total Energy](../demos/plots/b4_total_energy.png)
+
+并没看出显著的区别，但是速度确实慢了很多，可能是需要更有针对性的demo
 
 ## 5 交互方式
 
