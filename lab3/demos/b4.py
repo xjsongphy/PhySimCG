@@ -12,13 +12,13 @@ def run(debug: bool = False, safe_boot: bool = False):
     ti.init(arch=ti.cpu if safe_boot else ti.gpu)
 
     defaults = SoftBodyDefaults(
-        gravity=(0.0, -0.25, 0.0),
+        gravity=(0.0, -0.05, 0.0),
         density=400.0,
         youngs_modulus=2.0e4,
         poisson_ratio=0.2,
-        damping=0.998,
+        damping=0.995,
         dt=1.0e-2,
-        substeps=1,
+        substeps=5,
     )
     config = defaults.make_config(
         use_implicit=True,
