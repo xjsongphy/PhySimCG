@@ -13,6 +13,8 @@ class ConstraintMode(IntEnum):
     SIDE_X_MIN = 1
     SIDE_X_BOTH = 2
     TOP_BOTTOM = 3
+    SINGLE_CORNER = 4
+    TWO_CORNERS_INSET = 5
 
 
 @dataclass(slots=True)
@@ -64,6 +66,8 @@ class FEMConfig:
     # Cloth bending (B2/B3 cloth): simple edge-based bending regularization
     cloth_bend_k: float = 120.0
     cloth_bend_damping: float = 2.0
+    # For TWO_CORNERS_INSET mode: inward offset ratio for each top corner.
+    cloth_anchor_inset_ratio: float = 0.15
 
     # Boundary vibration (B1 bonus): fixed vertices sinusoidal vibration
     enable_boundary_vibration: bool = False

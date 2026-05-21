@@ -73,6 +73,7 @@ class ClothSystem:
         self.fixed = ti.field(dtype=ti.i32, shape=self.num_vertices)
 
         self.tris = ti.Vector.field(3, dtype=ti.i32, shape=self.num_tris)
+        self.tri_indices = ti.field(dtype=ti.i32, shape=self.num_tris * 3)
         self.dm_inv = ti.Matrix.field(2, 2, dtype=ti.f32, shape=self.num_tris)
         self.rest_area = ti.field(dtype=ti.f32, shape=self.num_tris)
         self.edge_indices = ti.field(dtype=ti.i32, shape=self.num_edges * 2)
@@ -94,16 +95,20 @@ class ClothSystem:
         self._sim_time = 0.0
         self._boundary_rest_y = ti.field(dtype=ti.f32, shape=self.num_vertices)
 
-        self._init_from_numpy(points, uv, tris, edges, bend_edges, nx, ny)
-        self._rest_positions_np = self.x.to_numpy()
         self._nx = nx
         self._ny = ny
+        self._init_from_numpy(points, uv, tris, edges, bend_edges, nx, ny)
+        self._base_positions_np = self.x.to_numpy()
+        self._rest_positions_np = self._build_mode_positions(self.config.constraint_mode)
+        self.x.from_numpy(self._rest_positions_np)
+        self._apply_constraint_mode(self._rest_positions_np, nx, ny, self.config.constraint_mode)
 
     def _init_from_numpy(self, points, uv, tris, edges, bend_edges, nx, ny):
         self.x.from_numpy(points)
         self.v.fill(0.0)
         self.f.fill(0.0)
         self.tris.from_numpy(tris)
+        self.tri_indices.from_numpy(tris.reshape(-1))
         self.fixed.fill(0)
 
         dm_inv_np = np.zeros((self.num_tris, 2, 2), dtype=np.float32)
@@ -147,24 +152,73 @@ class ClothSystem:
         boundary_rest_y_np = points[:, 1].copy()
         self._boundary_rest_y.from_numpy(boundary_rest_y_np)
 
+    def _pin_top(self, y: np.ndarray, y_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(y, y_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_side_x_min(self, x: np.ndarray, x_min: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(x, x_min, atol=tol)] = 1
+        return pinned
+
+    def _pin_side_x_both(self, x: np.ndarray, x_min: float, x_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(x, x_min, atol=tol) | np.isclose(x, x_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_top_bottom(self, y: np.ndarray, y_min: float, y_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(y, y_min, atol=tol) | np.isclose(y, y_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_single_corner(self, nx: int, ny: int) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[ny * (nx + 1)] = 1
+        return pinned
+
+    def _pin_two_corners_inset(self, nx: int, ny: int) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        # Pin the two top-row corner vertices.
+        left = ny * (nx + 1)
+        right = (ny + 1) * (nx + 1) - 1
+        pinned[left] = 1
+        pinned[right] = 1
+        return pinned
+
+    def _build_mode_positions(self, mode: ConstraintMode) -> np.ndarray:
+        pts = self._base_positions_np.copy()
+        if mode == ConstraintMode.TWO_CORNERS_INSET:
+            nx, ny = self._nx, self._ny
+            left = ny * (nx + 1)
+            right = (ny + 1) * (nx + 1) - 1
+            span = float(pts[right, 0] - pts[left, 0])
+            inset = self.config.cloth_anchor_inset_ratio * span
+            pts[left, 0] += inset
+            pts[right, 0] -= inset
+        return pts
+
+    def _pin_row0(self, nx: int) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        for i in range(nx + 1):
+            pinned[i] = 1
+        return pinned
+
     def _apply_constraint_mode(self, points: np.ndarray, nx: int, ny: int, mode: ConstraintMode):
         x = points[:, 0]
         y = points[:, 1]
         x_min, x_max = x.min(), x.max()
         y_min, y_max = y.min(), y.max()
         tol = 1.0e-6
-        pinned = np.zeros(self.num_vertices, dtype=np.int32)
-        if mode == ConstraintMode.TOP:
-            pinned[np.isclose(y, y_max, atol=tol)] = 1
-        elif mode == ConstraintMode.SIDE_X_MIN:
-            pinned[np.isclose(x, x_min, atol=tol)] = 1
-        elif mode == ConstraintMode.SIDE_X_BOTH:
-            pinned[np.isclose(x, x_min, atol=tol) | np.isclose(x, x_max, atol=tol)] = 1
-        elif mode == ConstraintMode.TOP_BOTTOM:
-            pinned[np.isclose(y, y_min, atol=tol) | np.isclose(y, y_max, atol=tol)] = 1
-        else:
-            for i in range(nx + 1):
-                pinned[i] = 1
+        dispatch = {
+            ConstraintMode.TOP: lambda: self._pin_top(y, y_max, tol),
+            ConstraintMode.SIDE_X_MIN: lambda: self._pin_side_x_min(x, x_min, tol),
+            ConstraintMode.SIDE_X_BOTH: lambda: self._pin_side_x_both(x, x_min, x_max, tol),
+            ConstraintMode.TOP_BOTTOM: lambda: self._pin_top_bottom(y, y_min, y_max, tol),
+            ConstraintMode.SINGLE_CORNER: lambda: self._pin_single_corner(nx, ny),
+            ConstraintMode.TWO_CORNERS_INSET: lambda: self._pin_two_corners_inset(nx, ny),
+        }
+        pinned = dispatch.get(mode, lambda: self._pin_row0(nx))()
         self.fixed.from_numpy(pinned)
 
     @ti.kernel
@@ -340,6 +394,8 @@ class ClothSystem:
 
     def set_constraint_mode(self, mode: ConstraintMode) -> None:
         self.config.constraint_mode = mode
+        self._rest_positions_np = self._build_mode_positions(mode)
+        self.x.from_numpy(self._rest_positions_np)
         self._apply_constraint_mode(self._rest_positions_np, self._nx, self._ny, mode)
         self.end_drag()
 

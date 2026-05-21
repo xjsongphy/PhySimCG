@@ -95,23 +95,46 @@ class FEMSystem:
         boundary_rest_y_np = points[:, 1].copy()
         self._boundary_rest_y.from_numpy(boundary_rest_y_np)
 
+    def _pin_top(self, y: np.ndarray, y_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(y, y_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_side_x_min(self, x: np.ndarray, x_min: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(x, x_min, atol=tol)] = 1
+        return pinned
+
+    def _pin_side_x_both(self, x: np.ndarray, x_min: float, x_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(x, x_min, atol=tol) | np.isclose(x, x_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_top_bottom(self, y: np.ndarray, y_min: float, y_max: float, tol: float) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        pinned[np.isclose(y, y_min, atol=tol) | np.isclose(y, y_max, atol=tol)] = 1
+        return pinned
+
+    def _pin_single_corner(self, y: np.ndarray) -> np.ndarray:
+        pinned = np.zeros(self.num_vertices, dtype=np.int32)
+        idx = int(np.argmax(y))
+        pinned[idx] = 1
+        return pinned
+
     def _apply_constraint_mode(self, points: np.ndarray, mode: ConstraintMode) -> None:
         x = points[:, 0]
         y = points[:, 1]
         x_min, x_max = x.min(), x.max()
         y_min, y_max = y.min(), y.max()
         tol = 1.0e-6
-        pinned = np.zeros(points.shape[0], dtype=np.int32)
-        if mode == ConstraintMode.TOP:
-            pinned[np.isclose(y, y_max, atol=tol)] = 1
-        elif mode == ConstraintMode.SIDE_X_MIN:
-            pinned[np.isclose(x, x_min, atol=tol)] = 1
-        elif mode == ConstraintMode.SIDE_X_BOTH:
-            pinned[np.isclose(x, x_min, atol=tol) | np.isclose(x, x_max, atol=tol)] = 1
-        elif mode == ConstraintMode.TOP_BOTTOM:
-            pinned[np.isclose(y, y_min, atol=tol) | np.isclose(y, y_max, atol=tol)] = 1
-        else:
-            pinned[np.isclose(y, y_max, atol=tol)] = 1
+        dispatch = {
+            ConstraintMode.TOP: lambda: self._pin_top(y, y_max, tol),
+            ConstraintMode.SIDE_X_MIN: lambda: self._pin_side_x_min(x, x_min, tol),
+            ConstraintMode.SIDE_X_BOTH: lambda: self._pin_side_x_both(x, x_min, x_max, tol),
+            ConstraintMode.TOP_BOTTOM: lambda: self._pin_top_bottom(y, y_min, y_max, tol),
+            ConstraintMode.SINGLE_CORNER: lambda: self._pin_single_corner(y),
+        }
+        pinned = dispatch.get(mode, dispatch[ConstraintMode.TOP])()
         self.fixed.from_numpy(pinned)
 
     @ti.kernel
