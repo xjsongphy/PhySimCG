@@ -36,7 +36,7 @@ class BaseFEMSolver:
 
 
 class ExplicitFEMSolver(BaseFEMSolver):
-    def substep(self) -> None:
+    def substep(self, dt_sub: float) -> None:
         self.system.clear_forces()
         gx, gy, gz = self.config.gravity
         self.system.add_gravity(gx, gy, gz)
@@ -49,19 +49,21 @@ class ExplicitFEMSolver(BaseFEMSolver):
         self.system.add_drag_force()
         if hasattr(self.system, "add_collision_forces"):
             self.system.add_collision_forces()
-        self.system.integrate_explicit(self.config.dt, self.config.damping)
+        self.system.integrate_explicit(dt_sub, self.config.damping)
         # Apply boundary vibration after integration (overrides fixed vertex positions)
         if self.config.enable_boundary_vibration and hasattr(self.system, "apply_boundary_vibration"):
             t = self.system.get_sim_time()
             self.system.apply_boundary_vibration(t, self.config.boundary_vibration_amplitude, self.config.boundary_vibration_frequency)
         if self.config.enable_builtin_ground:
             self.system.apply_ground_plane(self.config.builtin_ground_y, self.config.builtin_ground_restitution)
-        self.system.advance_sim_time(self.config.dt)
+        self.system.advance_sim_time(dt_sub)
 
     def step(self) -> None:
         self.sync_material_from_config()
-        for _ in range(self.config.substeps):
-            self.substep()
+        n_substeps = max(1, int(self.config.substeps))
+        dt_sub = self.config.dt / n_substeps
+        for _ in range(n_substeps):
+            self.substep(dt_sub)
 
 
 class ImplicitNewtonCGSolver(BaseFEMSolver):
