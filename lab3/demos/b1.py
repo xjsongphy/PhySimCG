@@ -39,6 +39,9 @@ def run(debug: bool = False, safe_boot: bool = False):
     ui_cfg.parameters.show_cg_iters = False
     # B1 bonus: enable boundary vibration controls
     ui_cfg.parameters.show_boundary_vibration = True
+    slider_ranges = {
+        "dt": (1.0e-3, 1.0e-2),
+    }
 
     def _rebuild(name: str):
         p = mesh_presets[name]
@@ -60,6 +63,7 @@ def run(debug: bool = False, safe_boot: bool = False):
         logger=logger,
         debug=debug,
         defaults=defaults,
+        slider_ranges=slider_ranges,
         analysis_energy_fn=compute_model_energy_breakdown,
     )
 
